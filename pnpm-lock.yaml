@@ -43,6 +43,25 @@ importers:
         specifier: ^2.1.9
         version: 2.1.9(@types/node@22.20.0)
 
+  examples/nestjs:
+    dependencies:
+      '@safecache/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@safecache/memory':
+        specifier: workspace:*
+        version: link:../../packages/memory
+      '@safecache/nestjs':
+        specifier: workspace:*
+        version: link:../../packages/nestjs
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.20.0)
+
   examples/redis-distributed:
     dependencies:
       '@safecache/core':
@@ -80,7 +99,55 @@ importers:
         specifier: ^2.1.9
         version: 2.1.9(@types/node@22.20.0)
 
+  packages/decorators:
+    dependencies:
+      '@safecache/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.20.0)
+
   packages/events:
+    dependencies:
+      '@safecache/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.20.0)
+
+  packages/express:
+    dependencies:
+      '@safecache/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.20.0)
+
+  packages/fastify:
     dependencies:
       '@safecache/core':
         specifier: workspace:*
@@ -129,6 +196,22 @@ importers:
         version: 2.1.9(@types/node@22.20.0)
 
   packages/memory:
+    dependencies:
+      '@safecache/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.20.0)
+
+  packages/nestjs:
     dependencies:
       '@safecache/core':
         specifier: workspace:*
