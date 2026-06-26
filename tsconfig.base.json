@@ -3,6 +3,12 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "baseUrl": ".",
+    "paths": {
+      "@safecache/core": ["packages/core/src/index.ts"],
+      "@safecache/memory": ["packages/memory/src/index.ts"],
+      "@safecache/testing": ["packages/testing/src/index.ts"]
+    },
     "lib": ["ES2022"],
     "strict": true,
     "declaration": true,
