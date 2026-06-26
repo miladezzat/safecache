@@ -28,6 +28,8 @@ This repository is being implemented phase by phase:
 - `@safecache/redis`: Redis-backed provider and tag index.
 - `@safecache/locks`: distributed locks.
 - `@safecache/pubsub`: distributed invalidation.
+- `@safecache/kafka`, `@safecache/nats`, `@safecache/rabbitmq`, `@safecache/aws-events`:
+  advanced event bus adapters.
 
 ## Safety Model
 

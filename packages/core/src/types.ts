@@ -70,6 +70,9 @@ export interface CacheEvent {
   tenant?: string;
   key?: string;
   tag?: string;
+  actor?: string;
+  reason?: string;
+  region?: string;
 }
 
 export interface CacheEventBus {

@@ -125,6 +125,22 @@ importers:
         specifier: ^2.1.9
         version: 2.1.9(@types/node@22.20.0)
 
+  packages/aws-events:
+    dependencies:
+      '@safecache/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.20.0)
+
   packages/cli:
     dependencies:
       '@safecache/core':
@@ -239,6 +255,22 @@ importers:
         specifier: ^2.1.9
         version: 2.1.9(@types/node@22.20.0)
 
+  packages/kafka:
+    dependencies:
+      '@safecache/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.20.0)
+
   packages/locks:
     dependencies:
       '@safecache/core':
@@ -335,6 +367,22 @@ importers:
         specifier: ^2.1.9
         version: 2.1.9(@types/node@22.20.0)
 
+  packages/nats:
+    dependencies:
+      '@safecache/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.20.0)
+
   packages/nestjs:
     dependencies:
       '@safecache/core':
@@ -384,6 +432,22 @@ importers:
         version: 2.1.9(@types/node@22.20.0)
 
   packages/pubsub:
+    dependencies:
+      '@safecache/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.20.0)
+
+  packages/rabbitmq:
     dependencies:
       '@safecache/core':
         specifier: workspace:*
