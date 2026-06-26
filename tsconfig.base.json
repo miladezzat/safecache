@@ -8,6 +8,7 @@
       "@safecache/core": ["packages/core/src/index.ts"],
       "@safecache/cli": ["packages/cli/src/index.ts"],
       "@safecache/decorators": ["packages/decorators/src/index.ts"],
+      "@safecache/dashboard": ["packages/dashboard/src/index.ts"],
       "@safecache/events": ["packages/events/src/index.ts"],
       "@safecache/express": ["packages/express/src/index.ts"],
       "@safecache/fastify": ["packages/fastify/src/index.ts"],

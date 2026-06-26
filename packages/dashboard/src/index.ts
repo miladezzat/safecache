@@ -1,0 +1,269 @@
+export interface HotKeyMetric {
+  key: string;
+  hits: number;
+}
+
+export interface TagMetric {
+  tag: string;
+  keys: number;
+}
+
+export interface InvalidationEventMetric {
+  type: "key" | "tag";
+  target: string;
+  timestamp: number;
+}
+
+export interface ErrorMetric {
+  operation: string;
+  message: string;
+  timestamp: number;
+}
+
+export interface LockContentionMetric {
+  lock: string;
+  waitMs: number;
+}
+
+export interface SlowCacheCallMetric {
+  operation: string;
+  durationMs: number;
+}
+
+export interface HealthMetric {
+  name: string;
+  ok: boolean;
+  details?: Record<string, unknown>;
+}
+
+export interface DashboardSnapshot {
+  hitRate: number;
+  missRate: number;
+  hotKeys: HotKeyMetric[];
+  tags: TagMetric[];
+  invalidationEvents: InvalidationEventMetric[];
+  staleServed: number;
+  errors: ErrorMetric[];
+  lockContention: LockContentionMetric[];
+  slowCacheCalls: SlowCacheCallMetric[];
+  providerHealth: HealthMetric[];
+  pluginHealth: HealthMetric[];
+}
+
+export interface DashboardRequest {
+  method: string;
+  path: string;
+}
+
+export interface DashboardResponse {
+  status: number;
+  headers: Record<string, string>;
+  body: string;
+}
+
+export interface DashboardOptions {
+  title?: string;
+  readOnly?: boolean;
+  snapshot: () => Promise<DashboardSnapshot>;
+}
+
+export interface Dashboard {
+  handle(request: DashboardRequest): Promise<DashboardResponse>;
+}
+
+export function createEmptyDashboardSnapshot(): DashboardSnapshot {
+  return {
+    hitRate: 0,
+    missRate: 0,
+    hotKeys: [],
+    tags: [],
+    invalidationEvents: [],
+    staleServed: 0,
+    errors: [],
+    lockContention: [],
+    slowCacheCalls: [],
+    providerHealth: [],
+    pluginHealth: [],
+  };
+}
+
+export function createDashboard(options: DashboardOptions): Dashboard {
+  const readOnly = options.readOnly ?? true;
+
+  return {
+    async handle(request) {
+      if (readOnly && request.method !== "GET" && request.method !== "HEAD") {
+        return {
+          status: 405,
+          headers: { "content-type": "text/plain" },
+          body: "Dashboard is read-only",
+        };
+      }
+
+      const snapshot = await options.snapshot();
+      if (request.path === "/api/snapshot") {
+        return {
+          status: 200,
+          headers: { "content-type": "application/json" },
+          body: `${JSON.stringify(snapshot, null, 2)}\n`,
+        };
+      }
+
+      return {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+        body: renderDashboard(snapshot, { title: options.title }),
+      };
+    },
+  };
+}
+
+export function renderDashboard(
+  snapshot: DashboardSnapshot,
+  options: { title?: string } = {},
+): string {
+  const title = options.title ?? "SafeCache Dashboard";
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)}</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #17202a;
+      background: #f7f9fb;
+    }
+    body {
+      margin: 0;
+      background: #f7f9fb;
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 32px 20px;
+    }
+    h1 {
+      margin: 0 0 24px;
+      font-size: 28px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 14px;
+    }
+    section {
+      min-height: 126px;
+      border: 1px solid #d8e0e8;
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 16px;
+    }
+    h2 {
+      margin: 0 0 12px;
+      font-size: 15px;
+      line-height: 1.3;
+      letter-spacing: 0;
+    }
+    .value {
+      font-size: 26px;
+      line-height: 1.2;
+      font-weight: 700;
+    }
+    ul {
+      margin: 0;
+      padding-left: 18px;
+    }
+    li {
+      margin: 6px 0;
+      overflow-wrap: anywhere;
+    }
+    .ok {
+      color: #0f766e;
+    }
+    .bad {
+      color: #b42318;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>${escapeHtml(title)}</h1>
+    <div class="grid">
+      ${panel("Hit rate", percent(snapshot.hitRate))}
+      ${panel("Miss rate", percent(snapshot.missRate))}
+      ${listPanel(
+        "Hot keys",
+        snapshot.hotKeys.map((item) => `${item.key} (${item.hits})`),
+      )}
+      ${listPanel(
+        "Tags",
+        snapshot.tags.map((item) => `${item.tag} (${item.keys})`),
+      )}
+      ${listPanel(
+        "Invalidation events",
+        snapshot.invalidationEvents.map((item) => `${item.type}:${item.target}`),
+      )}
+      ${panel("Stale served", String(snapshot.staleServed))}
+      ${listPanel(
+        "Errors",
+        snapshot.errors.map((item) => `${item.operation}: ${item.message}`),
+      )}
+      ${listPanel(
+        "Lock contention",
+        snapshot.lockContention.map((item) => `${item.lock} (${item.waitMs}ms)`),
+      )}
+      ${listPanel(
+        "Slow cache calls",
+        snapshot.slowCacheCalls.map((item) => `${item.operation} (${item.durationMs}ms)`),
+      )}
+      ${healthPanel("Provider health", snapshot.providerHealth)}
+      ${healthPanel("Plugin health", snapshot.pluginHealth)}
+    </div>
+  </main>
+</body>
+</html>`;
+}
+
+function panel(title: string, value: string): string {
+  return `<section><h2>${escapeHtml(title)}</h2><div class="value">${escapeHtml(value)}</div></section>`;
+}
+
+function listPanel(title: string, items: string[]): string {
+  const content =
+    items.length === 0
+      ? '<div class="value">0</div>'
+      : `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
+  return `<section><h2>${escapeHtml(title)}</h2>${content}</section>`;
+}
+
+function healthPanel(title: string, items: HealthMetric[]): string {
+  const content =
+    items.length === 0
+      ? '<div class="value">0</div>'
+      : `<ul>${items
+          .map(
+            (item) =>
+              `<li class="${item.ok ? "ok" : "bad"}">${escapeHtml(item.name)}: ${
+                item.ok ? "ok" : "failed"
+              }</li>`,
+          )
+          .join("")}</ul>`;
+  return `<section><h2>${escapeHtml(title)}</h2>${content}</section>`;
+}
+
+function percent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
