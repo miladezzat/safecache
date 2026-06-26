@@ -43,6 +43,25 @@ importers:
         specifier: ^2.1.9
         version: 2.1.9(@types/node@22.20.0)
 
+  examples/magic-mongodb:
+    dependencies:
+      '@safecache/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@safecache/memory':
+        specifier: workspace:*
+        version: link:../../packages/memory
+      '@safecache/mongodb-streams':
+        specifier: workspace:*
+        version: link:../../packages/mongodb-streams
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.20.0)
+
   examples/nestjs:
     dependencies:
       '@safecache/core':
@@ -54,6 +73,25 @@ importers:
       '@safecache/nestjs':
         specifier: workspace:*
         version: link:../../packages/nestjs
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.20.0)
+
+  examples/postgres-outbox:
+    dependencies:
+      '@safecache/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@safecache/memory':
+        specifier: workspace:*
+        version: link:../../packages/memory
+      '@safecache/postgres-outbox':
+        specifier: workspace:*
+        version: link:../../packages/postgres-outbox
     devDependencies:
       typescript:
         specifier: ^5.9.3
@@ -211,6 +249,22 @@ importers:
         specifier: ^2.1.9
         version: 2.1.9(@types/node@22.20.0)
 
+  packages/mongodb-streams:
+    dependencies:
+      '@safecache/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.20.0)
+
   packages/mongoose:
     dependencies:
       '@safecache/core':
@@ -228,6 +282,22 @@ importers:
         version: 2.1.9(@types/node@22.20.0)
 
   packages/nestjs:
+    dependencies:
+      '@safecache/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.20.0)
+
+  packages/postgres-outbox:
     dependencies:
       '@safecache/core':
         specifier: workspace:*

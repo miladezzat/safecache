@@ -1,0 +1,19 @@
+{
+  "name": "magic-mongodb",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@safecache/core": "workspace:*",
+    "@safecache/memory": "workspace:*",
+    "@safecache/mongodb-streams": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
+  }
+}
