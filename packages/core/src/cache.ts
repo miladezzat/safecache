@@ -44,6 +44,10 @@ class SafeCache implements Cache {
   private readonly singleFlight;
   private readonly circuitBreaker;
   private readonly pluginRegistry;
+  private readonly source: string;
+  private readonly seenEventIds = new Set<string>();
+  private readonly unsubscribers: Array<() => Promise<void>> = [];
+  private eventCounter = 0;
   private readonly counters: CacheStats = {
     hits: 0,
     misses: 0,
@@ -60,8 +64,10 @@ class SafeCache implements Cache {
     this.events = new RuntimeEvents();
     this.singleFlight = new SingleFlight();
     this.circuitBreaker = new CircuitBreaker(options.safety, this.clock);
+    this.source = options.source ?? `safecache-${Math.random().toString(36).slice(2)}`;
     this.layers = normalizeLayers(options);
     this.pluginRegistry = new PluginRegistry(this, (event) => this.emit(event));
+    this.subscribeToDistributedEvents();
     for (const plugin of options.plugins ?? []) {
       this.use(plugin);
     }
@@ -113,6 +119,41 @@ class SafeCache implements Cache {
   }
 
   async invalidate(key: string, options: { tenant?: string } = {}): Promise<void> {
+    await this.invalidateKeyInternal(key, options, true);
+  }
+
+  async invalidateByTag(tag: string, options: { tenant?: string } = {}): Promise<void> {
+    await this.invalidateTagInternal(tag, options, true);
+  }
+
+  use(plugin: CachePlugin): void {
+    this.pluginRegistry.use(plugin);
+  }
+
+  async shutdown(): Promise<void> {
+    for (const unsubscribe of this.unsubscribers.splice(0)) {
+      await unsubscribe();
+    }
+    await this.pluginRegistry.shutdown();
+  }
+
+  on(name: CacheRuntimeEventName, handler: CacheRuntimeEventHandler): void {
+    this.events.on(name, handler);
+  }
+
+  off(name: CacheRuntimeEventName, handler: CacheRuntimeEventHandler): void {
+    this.events.off(name, handler);
+  }
+
+  stats(): CacheStats {
+    return { ...this.counters, circuitBreakerOpen: this.circuitBreaker.isOpen };
+  }
+
+  private async invalidateKeyInternal(
+    key: string,
+    options: { tenant?: string } = {},
+    publish: boolean,
+  ): Promise<void> {
     const scopedKey = scopeKey(this.options.namespace, key, options.tenant);
     await this.deleteScopedKey(scopedKey);
     for (const layer of this.layers) {
@@ -122,9 +163,20 @@ class SafeCache implements Cache {
     }
     this.counters.invalidations += 1;
     this.emit({ type: "invalidate", key, tenant: options.tenant });
+    if (publish) {
+      await this.publishDistributedEvent({
+        type: "invalidate:key",
+        key,
+        tenant: options.tenant,
+      });
+    }
   }
 
-  async invalidateByTag(tag: string, options: { tenant?: string } = {}): Promise<void> {
+  private async invalidateTagInternal(
+    tag: string,
+    options: { tenant?: string } = {},
+    publish: boolean,
+  ): Promise<void> {
     const scope = scopePrefix(this.options.namespace, options.tenant);
     const keys = new Set<string>();
     for (const layer of this.layers) {
@@ -144,26 +196,13 @@ class SafeCache implements Cache {
     }
     this.counters.invalidations += 1;
     this.emit({ type: "invalidate", tag, tenant: options.tenant });
-  }
-
-  use(plugin: CachePlugin): void {
-    this.pluginRegistry.use(plugin);
-  }
-
-  shutdown(): Promise<void> {
-    return this.pluginRegistry.shutdown();
-  }
-
-  on(name: CacheRuntimeEventName, handler: CacheRuntimeEventHandler): void {
-    this.events.on(name, handler);
-  }
-
-  off(name: CacheRuntimeEventName, handler: CacheRuntimeEventHandler): void {
-    this.events.off(name, handler);
-  }
-
-  stats(): CacheStats {
-    return { ...this.counters, circuitBreakerOpen: this.circuitBreaker.isOpen };
+    if (publish) {
+      await this.publishDistributedEvent({
+        type: "invalidate:tag",
+        tag,
+        tenant: options.tenant,
+      });
+    }
   }
 
   private async readLayers<T>(query: QueryOptions<T>, scopedKey: string): Promise<ReadResult<T>> {
@@ -443,6 +482,66 @@ class SafeCache implements Cache {
 
   private emit(event: CacheRuntimeEvent): void {
     this.events.emit(event);
+  }
+
+  private subscribeToDistributedEvents(): void {
+    const bus = this.options.distributed?.events;
+    if (!bus) {
+      return;
+    }
+    void bus
+      .subscribe(async (event) => {
+        if (event.namespace !== this.options.namespace || event.source === this.source) {
+          return;
+        }
+        if (this.hasSeenEvent(event.id)) {
+          return;
+        }
+        if (event.type === "invalidate:key" && event.key) {
+          await this.invalidateKeyInternal(event.key, { tenant: event.tenant }, false);
+        }
+        if (event.type === "invalidate:tag" && event.tag) {
+          await this.invalidateTagInternal(event.tag, { tenant: event.tenant }, false);
+        }
+      })
+      .then((unsubscribe) => this.unsubscribers.push(unsubscribe))
+      .catch((error: unknown) => this.recordError("subscribe", error));
+  }
+
+  private hasSeenEvent(id: string): boolean {
+    if (this.seenEventIds.has(id)) {
+      return true;
+    }
+    this.seenEventIds.add(id);
+    if (this.seenEventIds.size > 1_000) {
+      const first = this.seenEventIds.values().next().value;
+      if (first) {
+        this.seenEventIds.delete(first);
+      }
+    }
+    return false;
+  }
+
+  private async publishDistributedEvent(
+    event:
+      | { type: "invalidate:key"; key: string; tenant?: string }
+      | { type: "invalidate:tag"; tag: string; tenant?: string },
+  ): Promise<void> {
+    const bus = this.options.distributed?.events;
+    if (!bus) {
+      return;
+    }
+    try {
+      await bus.publish({
+        id: `${this.source}:${this.clock.now()}:${this.eventCounter++}`,
+        source: this.source,
+        timestamp: this.clock.now(),
+        namespace: this.options.namespace,
+        ...event,
+      });
+    } catch (error) {
+      this.recordError("publish", error);
+    }
   }
 }
 

@@ -1,0 +1,21 @@
+{
+  "name": "redis-distributed",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@safecache/core": "workspace:*",
+    "@safecache/locks": "workspace:*",
+    "@safecache/memory": "workspace:*",
+    "@safecache/pubsub": "workspace:*",
+    "@safecache/redis": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
+  }
+}

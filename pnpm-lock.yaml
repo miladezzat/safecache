@@ -43,6 +43,31 @@ importers:
         specifier: ^2.1.9
         version: 2.1.9(@types/node@22.20.0)
 
+  examples/redis-distributed:
+    dependencies:
+      '@safecache/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@safecache/locks':
+        specifier: workspace:*
+        version: link:../../packages/locks
+      '@safecache/memory':
+        specifier: workspace:*
+        version: link:../../packages/memory
+      '@safecache/pubsub':
+        specifier: workspace:*
+        version: link:../../packages/pubsub
+      '@safecache/redis':
+        specifier: workspace:*
+        version: link:../../packages/redis
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.20.0)
+
   packages/core:
     devDependencies:
       tsup:
@@ -55,7 +80,71 @@ importers:
         specifier: ^2.1.9
         version: 2.1.9(@types/node@22.20.0)
 
+  packages/events:
+    dependencies:
+      '@safecache/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.20.0)
+
+  packages/locks:
+    dependencies:
+      '@safecache/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.20.0)
+
   packages/memory:
+    dependencies:
+      '@safecache/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.20.0)
+
+  packages/pubsub:
+    dependencies:
+      '@safecache/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.20.0)
+
+  packages/redis:
     dependencies:
       '@safecache/core':
         specifier: workspace:*

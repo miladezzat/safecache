@@ -2,6 +2,8 @@ import { describe, expect, test, vi } from "vitest";
 import {
   createCache,
   jsonSerializer,
+  type CacheEvent,
+  type CacheEventBus,
   type CachePlugin,
   type CacheProvider,
   type CacheTagIndex,
@@ -86,6 +88,25 @@ class RawMapProvider implements CacheProvider {
 
   async clear() {
     this.values.clear();
+  }
+}
+
+class InlineEventBus implements CacheEventBus {
+  readonly published: CacheEvent[] = [];
+  private readonly handlers = new Set<(event: CacheEvent) => Promise<void>>();
+
+  async publish(event: CacheEvent) {
+    this.published.push(event);
+    for (const handler of this.handlers) {
+      await handler(event);
+    }
+  }
+
+  async subscribe(handler: (event: CacheEvent) => Promise<void>) {
+    this.handlers.add(handler);
+    return async () => {
+      this.handlers.delete(handler);
+    };
   }
 }
 
@@ -356,6 +377,40 @@ describe("createCache", () => {
     await cache.shutdown();
 
     expect(calls).toEqual(["setup", "shutdown"]);
+  });
+
+  test("distributed events invalidate other cache instances and ignore self events", async () => {
+    const bus = new InlineEventBus();
+    const providerA = new RawMapProvider();
+    const providerB = new RawMapProvider();
+    const cacheA = createCache({
+      namespace: "app",
+      source: "a",
+      provider: providerA,
+      defaultTtl: "1m",
+      distributed: { events: bus },
+    });
+    const cacheB = createCache({
+      namespace: "app",
+      source: "b",
+      provider: providerB,
+      defaultTtl: "1m",
+      distributed: { events: bus },
+    });
+
+    await cacheA.query({ key: "user:1", tags: ["user:1"], fetcher: async () => "a-old" });
+    await cacheB.query({ key: "user:1", tags: ["user:1"], fetcher: async () => "b-old" });
+
+    await cacheA.invalidateByTag("user:1");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await expect(
+      cacheA.query({ key: "user:1", tags: ["user:1"], fetcher: async () => "a-new" }),
+    ).resolves.toBe("a-new");
+    await expect(
+      cacheB.query({ key: "user:1", tags: ["user:1"], fetcher: async () => "b-new" }),
+    ).resolves.toBe("b-new");
+    expect(bus.published).toHaveLength(1);
   });
 
   test("json serializer round-trips entries", () => {
