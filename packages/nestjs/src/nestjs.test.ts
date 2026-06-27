@@ -56,14 +56,29 @@ describe("SafeCacheModule", () => {
       },
     });
 
-    const tokenProvider = module.providers[0];
-    const serviceProvider = module.providers[1];
-    const resolvedCache = await tokenProvider?.useFactory?.();
-    const service = await serviceProvider?.useFactory?.();
+    // Simulate the NestJS DI container resolving each provider exactly once.
+    // SAFE_CACHE is built from the user factory; SafeCacheService is built from
+    // a factory that injects the already-resolved SAFE_CACHE token.
+    const resolved = new Map<unknown, unknown>();
+    for (const provider of module.providers) {
+      if (provider.useFactory) {
+        const deps = (provider.inject ?? []).map((token) => resolved.get(token));
+        resolved.set(provider.provide, await provider.useFactory(...(deps as never[])));
+      } else {
+        resolved.set(provider.provide, provider.useValue);
+      }
+    }
 
+    const resolvedCache = resolved.get(module.providers[0]!.provide);
+    const service = resolved.get(SafeCacheService);
+
+    // The user factory must run exactly once (no duplicate Cache instances,
+    // duplicate connections, or double subscriptions).
     expect(calls).toBe(1);
     expect(resolvedCache).toBe(cache);
     expect(service).toBeInstanceOf(SafeCacheService);
+    // SAFE_CACHE and SafeCacheService share the same underlying instance.
     expect((service as SafeCacheService).raw).toBe(cache);
+    expect((service as SafeCacheService).raw).toBe(resolvedCache);
   });
 });

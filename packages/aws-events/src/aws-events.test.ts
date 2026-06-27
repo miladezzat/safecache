@@ -43,4 +43,52 @@ describe("AWS event bus", () => {
     });
     expect(handler).toHaveBeenCalledWith(event);
   });
+
+  test("rejects when putEvents reports failed entries", async () => {
+    const client = {
+      putEvents: vi.fn(async () => ({
+        FailedEntryCount: 1,
+        Entries: [{ ErrorCode: "ThrottlingException", ErrorMessage: "Rate exceeded" }],
+      })),
+    };
+    const bus = awsEventBus({
+      client,
+      eventBusName: "cache-events",
+      source: "safecache",
+    });
+
+    await expect(bus.publish(event)).rejects.toThrow(/ThrottlingException/);
+    expect(client.putEvents).toHaveBeenCalledOnce();
+  });
+
+  test("rejects when the send path reports failed entries", async () => {
+    const client = {
+      send: vi.fn(async () => ({
+        FailedEntryCount: 1,
+        Entries: [{ ErrorCode: "ValidationException" }],
+      })),
+    };
+    const bus = awsEventBus({
+      client,
+      eventBusName: "cache-events",
+      source: "safecache",
+      command: (input) => input,
+    });
+
+    await expect(bus.publish(event)).rejects.toThrow(/ValidationException/);
+    expect(client.send).toHaveBeenCalledOnce();
+  });
+
+  test("resolves when putEvents reports no failed entries", async () => {
+    const client = {
+      putEvents: vi.fn(async () => ({ FailedEntryCount: 0, Entries: [{ EventId: "abc" }] })),
+    };
+    const bus = awsEventBus({
+      client,
+      eventBusName: "cache-events",
+      source: "safecache",
+    });
+
+    await expect(bus.publish(event)).resolves.toBeUndefined();
+  });
 });

@@ -19,30 +19,33 @@ visibility matter.
 - [`redis`](https://www.npmjs.com/package/redis) and [`ioredis`](https://www.npmjs.com/package/ioredis): Redis clients.
 - NestJS [`CacheModule`](https://docs.nestjs.com/techniques/caching): framework-level cache integration.
 - Decorator caching packages: method-level helpers that usually sit above a cache store.
-- Stale-while-revalidate helpers: utilities focused on returning stale values while refreshing.
+- Stale-while-revalidate helpers: utilities focused on returning stale values while refreshing, usually with request deduplication. Examples: the React data hook [`swr`](https://www.npmjs.com/package/swr) and the server-side, storage-agnostic [`stale-while-revalidate-cache`](https://www.npmjs.com/package/stale-while-revalidate-cache).
 
 ## Summary Table
 
-| Feature                         | SafeCache | cache-manager               | Keyv           | node-cache     | lru-cache      | Raw Redis clients |
-| ------------------------------- | --------- | --------------------------- | -------------- | -------------- | -------------- | ----------------- |
-| Cache-aside `query()` API       | Yes       | Partial                     | Manual         | Manual         | Manual         | Manual            |
-| `wrap()` convenience API        | Yes       | Yes                         | Manual         | Manual         | Manual         | Manual            |
-| Mutation-aware invalidation     | Yes       | Manual                      | Manual         | Manual         | Manual         | Manual            |
-| Tag invalidation                | Yes       | Store/custom-code dependent | Manual         | Manual         | Manual         | Manual            |
-| Namespace-aware keys            | Yes       | Manual                      | Manual         | Manual         | Manual         | Manual            |
-| Tenant-aware keys               | Yes       | Manual                      | Manual         | Manual         | Manual         | Manual            |
-| Local stampede protection       | Yes       | Limited/custom              | Manual         | Manual         | Manual         | Manual            |
-| Distributed lock support        | Yes       | Adapter/custom              | Manual         | No             | No             | Manual            |
-| Distributed invalidation events | Yes       | Adapter/custom              | Manual         | No             | No             | Manual            |
-| Fail-open behavior              | Yes       | Manual                      | Manual         | Manual         | Manual         | Manual            |
-| Provider circuit breaker        | Yes       | Manual                      | Manual         | Manual         | Manual         | Manual            |
-| Stale-while-revalidate          | Yes       | Limited/custom              | Manual         | Manual         | Manual         | Manual            |
-| Refresh-ahead                   | Yes       | Manual                      | Manual         | Manual         | Manual         | Manual            |
-| Version checks                  | Yes       | Manual                      | Manual         | Manual         | Manual         | Manual            |
-| Runtime events and stats        | Yes       | Limited/custom              | Limited/custom | Limited/custom | Limited/custom | Manual            |
-| Prometheus-style metrics        | Yes       | Manual                      | Manual         | Manual         | Manual         | Manual            |
-| Testing utilities               | Yes       | Manual                      | Manual         | Manual         | Manual         | Manual            |
-| Optional DB-change sync         | Yes       | No                          | No             | No             | No             | Manual            |
+Competitor grades reflect cache-manager v7.x (Keyv-based), keyv v5.x, node-cache v5.x,
+lru-cache v11.x, and node-redis v6 / ioredis v5 as of mid-2026.
+
+| Feature                         | SafeCache | cache-manager (v7)          | Keyv (v5)      | node-cache (v5) | lru-cache (v11) | Raw Redis clients |
+| ------------------------------- | --------- | --------------------------- | -------------- | --------------- | --------------- | ----------------- |
+| Cache-aside `query()` API       | Yes       | Partial (`wrap`)            | Manual         | Manual          | Via `fetch()`   | Manual            |
+| `wrap()` convenience API        | Yes       | Yes                         | Manual         | Manual          | Manual          | Manual            |
+| Mutation-aware invalidation     | Yes       | Manual                      | Manual         | Manual          | Manual          | Manual            |
+| Tag invalidation                | Yes       | Store/custom-code dependent | No             | Manual          | Manual          | Manual            |
+| Namespace-aware keys            | Yes       | Via Keyv namespace          | Yes (native)   | Manual          | Manual          | Manual            |
+| Tenant-aware keys               | Yes       | Manual                      | Manual         | Manual          | Manual          | Manual            |
+| Local stampede protection       | Yes       | Yes (`wrap` coalescing)     | Manual         | Manual          | Yes (`fetch()`) | Manual            |
+| Distributed lock support        | Yes       | Adapter/custom              | Manual         | No              | No              | Manual            |
+| Distributed invalidation events | Yes       | Adapter/custom              | Manual         | No              | No              | Manual            |
+| Fail-open behavior              | Yes       | Manual                      | Manual         | Manual          | Manual          | Manual            |
+| Provider circuit breaker        | Yes¹      | Manual                      | Manual         | Manual          | Manual          | Manual            |
+| Stale-while-revalidate          | Yes       | Yes (`refreshThreshold`)    | Manual         | Manual          | Yes (`fetch()`) | Manual            |
+| Refresh-ahead                   | Yes       | Yes (`refreshThreshold`)    | Manual         | Manual          | Manual²         | Manual            |
+| Version checks                  | Yes³      | Manual                      | Manual         | Manual          | Manual          | Manual            |
+| Runtime events and stats        | Yes       | Limited/custom              | Limited/custom | Limited/custom  | Limited/custom  | Manual            |
+| Prometheus-style metrics        | Yes       | Manual                      | Manual         | Manual          | Manual          | Manual            |
+| Testing utilities               | Yes       | Manual                      | Manual         | Manual          | Manual          | Manual            |
+| Optional DB-change sync         | Yes       | No                          | No             | No              | No              | Manual            |
 
 The table uses conservative wording:
 
@@ -51,6 +54,15 @@ The table uses conservative wording:
 - `Limited/custom` means the behavior may exist in some combinations, stores, or userland code, but
   it is not a consistent cross-provider contract.
 - `No` means the tool is intentionally scoped elsewhere.
+
+Footnotes:
+
+- **¹** SafeCache's circuit breaker is two-state (open/closed, consecutive-failure); it does not yet
+  probe with a half-open trial request before fully reopening.
+- **²** `lru-cache` refreshes on stale access via `allowStale`, but does not do proactive pre-expiry
+  refresh-ahead.
+- **³** SafeCache version checks are best-effort optimistic guards (non-atomic read-then-write), not a
+  transactional compare-and-set.
 
 ## SafeCache vs `cache-manager`
 
@@ -62,8 +74,8 @@ SafeCache differs by making cache safety and invalidation the main abstraction:
 - Canonical `query()` API with tags, tenants, TTL, stale behavior, and fetcher semantics.
 - `mutate()` for action-first invalidation after successful writes.
 - Built-in tag invalidation contract.
-- Multi-layer cache backfill.
-- Local single-flight for stampede protection.
+- Multi-layer cache backfill across providers (cache-manager also supports tiered stores).
+- Local single-flight for stampede protection as an explicit default (cache-manager also coalesces concurrent calls via `wrap()`).
 - Redis lock and Pub/Sub adapters for distributed coordination.
 - Runtime events, stats, metrics, CLI, and dashboard packages.
 - Optional database-change sync through MongoDB streams and Postgres outbox.
@@ -87,14 +99,15 @@ with application reads and mutations.
 
 ## SafeCache vs `node-cache` and `lru-cache`
 
-`node-cache` and `lru-cache` are local in-process caches. They are simple and fast for one process.
+`node-cache` and `lru-cache` are local in-process caches. They are simple and fast for one process
+(modern `lru-cache` also coalesces concurrent loads and can serve stale values through its `fetch()` API).
 
 SafeCache can use an in-memory layer too, but it adds behavior around that layer:
 
 - Tags and invalidation flows.
 - Fail-open fetcher fallback.
 - Multi-layer memory plus Redis setups.
-- Events and metrics.
+- Distributed invalidation events and a metrics exporter (`node-cache` already has local events and `getStats()`).
 - Distributed invalidation when multiple processes are running.
 
 Use a local cache when process-local data is enough. Use SafeCache when the same cache rules must
@@ -117,8 +130,9 @@ application cache.
 
 ## SafeCache vs Decorator Libraries
 
-Decorator libraries can make cache usage terse, but they often hide the cache instance or encourage
-implicit global behavior.
+Decorator libraries can make cache usage terse. Many (for example `@type-cacheable`'s global
+`useAdapter`, or `memoizee`'s per-function cache) encourage implicit or global cache state, though
+some (for example `node-ts-cache`) require an explicit cache instance.
 
 SafeCache decorators are optional and explicit:
 
@@ -132,15 +146,16 @@ are clearer.
 
 ## SafeCache vs Stale-While-Revalidate Helpers
 
-Stale-while-revalidate libraries focus on serving stale values while refreshing in the background.
-That is useful, but it is only one caching behavior.
+Stale-while-revalidate libraries focus on serving stale values while refreshing in the background,
+usually with request deduplication. That is useful, but it is a focused behavior rather than a full
+cache-safety model.
 
 SafeCache includes stale-while-revalidate as one option alongside:
 
 - Mutation-aware invalidation.
 - Tag invalidation.
 - Refresh-ahead.
-- Stampede protection.
+- Distributed stampede protection.
 - Provider failure behavior.
 - Distributed coordination.
 

@@ -23,7 +23,8 @@ export async function createRedisConnection(url: string): Promise<RedisClientTyp
 export function adaptRedisClient(client: RedisClientType): SafeCacheRedisClient {
   return {
     get: (key) => client.get(key),
-    set: (key, value, options) => client.set(key, value, options),
+    set: (key, value, options) =>
+      client.set(key, typeof value === "string" ? value : Buffer.from(value), options),
     del: (...keys) => client.del(keys),
     sAdd: (key, members) => client.sAdd(key, members),
     sMembers: (key) => client.sMembers(key),

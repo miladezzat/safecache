@@ -1,10 +1,10 @@
 import { createCache } from "@safecache/core";
 import { memoryProvider } from "@safecache/memory";
-import { redisLock } from "@safecache/locks";
+import { redisLock, type RedisLockClient } from "@safecache/locks";
 import { redisPubSub, type RedisPubSubClient } from "@safecache/pubsub";
 import { redisProvider, type RedisProviderClient } from "@safecache/redis";
 
-type RedisClient = RedisProviderClient & RedisPubSubClient;
+type RedisClient = RedisProviderClient & RedisLockClient & RedisPubSubClient;
 
 export function createDistributedCache(redis: RedisClient, source: string) {
   return createCache({

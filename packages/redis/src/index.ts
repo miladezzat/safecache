@@ -1,8 +1,8 @@
 import type { CacheProvider, CacheTagIndex } from "@safecache/core";
 
 export interface RedisProviderClient {
-  get(key: string): Promise<string | null>;
-  set(key: string, value: string, options?: { PX?: number }): Promise<unknown>;
+  get(key: string): Promise<string | Uint8Array | null>;
+  set(key: string, value: string | Uint8Array, options?: { PX?: number }): Promise<unknown>;
   del(...keys: string[]): Promise<number>;
   sAdd(key: string, members: string[]): Promise<number>;
   sMembers(key: string): Promise<string[]>;
@@ -32,8 +32,7 @@ export function redisProvider(
       return client.get(key);
     },
     async set(key, value, setOptions) {
-      const text = typeof value === "string" ? value : new TextDecoder().decode(value);
-      await client.set(key, text, { PX: setOptions.ttlMs });
+      await client.set(key, value, { PX: setOptions.ttlMs });
     },
     async delete(key) {
       await client.del(key);

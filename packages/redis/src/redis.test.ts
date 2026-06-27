@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { redisProvider } from "./index";
 
 class FakeRedis {
-  readonly values = new Map<string, string>();
+  readonly values = new Map<string, string | Uint8Array>();
   readonly sets = new Map<string, Set<string>>();
   readonly expires = new Map<string, number>();
   now = 0;
@@ -15,7 +15,7 @@ class FakeRedis {
     return this.values.get(key) ?? null;
   }
 
-  async set(key: string, value: string, options?: { PX?: number }) {
+  async set(key: string, value: string | Uint8Array, options?: { PX?: number }) {
     this.values.set(key, value);
     if (options?.PX) {
       this.expires.set(key, this.now + options.PX);
@@ -76,6 +76,21 @@ describe("redisProvider", () => {
     redis.now = 11;
     expect(await provider.get("k")).toBeNull();
     expect(await provider.health()).toMatchObject({ ok: true });
+  });
+
+  test("round-trips binary values with non-UTF8 bytes without corruption", async () => {
+    const redis = new FakeRedis();
+    const provider = redisProvider(redis);
+
+    const binary = new Uint8Array([0xff, 0x00, 0xfe]);
+    await provider.set("bin", binary, { ttlMs: 1000 });
+
+    const result = await provider.get("bin");
+    expect(result).not.toBeNull();
+    const bytes = Uint8Array.from(
+      result instanceof Uint8Array ? result : Buffer.from(result as string),
+    );
+    expect([...bytes]).toEqual([...binary]);
   });
 
   test("redis tag index tracks and removes keys by tag", async () => {

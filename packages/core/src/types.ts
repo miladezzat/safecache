@@ -73,6 +73,11 @@ export interface CacheEvent {
   actor?: string;
   reason?: string;
   region?: string;
+  /**
+   * Optional HMAC-SHA256 signature over a canonical serialization of the event
+   * (excluding this field). Populated only when `distributed.signingSecret` is set.
+   */
+  signature?: string;
 }
 
 export interface CacheEventBus {
@@ -120,6 +125,12 @@ export interface CacheOptions {
   distributed?: {
     lock?: CacheLock;
     events?: CacheEventBus;
+    /**
+     * Optional shared secret. When set, outgoing invalidation events are signed
+     * with HMAC-SHA256 and incoming events with a missing or invalid signature
+     * are dropped. When unset, events are neither signed nor verified.
+     */
+    signingSecret?: string;
   };
   consistency?: ConsistencyLevel;
   plugins?: CachePlugin[];

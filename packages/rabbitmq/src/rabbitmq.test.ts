@@ -41,4 +41,42 @@ describe("RabbitMQ event bus", () => {
     expect(handler).toHaveBeenCalledWith(event);
     expect(channel.cancel).toHaveBeenCalledWith("ctag");
   });
+
+  test("drops malformed/foreign deliveries without throwing and keeps dispatching good ones", async () => {
+    let consumer: ((message: { content: Buffer } | null) => void) | undefined;
+    const channel = {
+      assertExchange: vi.fn(async () => {}),
+      assertQueue: vi.fn(async () => ({ queue: "q1" })),
+      bindQueue: vi.fn(async () => {}),
+      publish: vi.fn(),
+      consume: vi.fn(async (_queue, handler) => {
+        consumer = handler;
+        return { consumerTag: "ctag" };
+      }),
+      cancel: vi.fn(async () => {}),
+      nack: vi.fn(),
+    };
+    const handler = vi.fn(async () => {});
+    const onError = vi.fn();
+    const bus = rabbitMqEventBus({ channel, exchange: "cache.events", onError });
+
+    await bus.subscribe(handler);
+
+    const poison = { content: Buffer.from("{not json") };
+    const foreign = { content: Buffer.from(JSON.stringify({ hello: "world" })) };
+    const good = { content: Buffer.from(JSON.stringify(event)) };
+
+    // A poison/foreign message must never throw out of the delivery callback.
+    expect(() => consumer?.(poison)).not.toThrow();
+    expect(() => consumer?.(foreign)).not.toThrow();
+    // Good deliveries still dispatch after a bad one.
+    expect(() => consumer?.(good)).not.toThrow();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(event);
+    expect(channel.nack).toHaveBeenCalledTimes(2);
+    expect(channel.nack).toHaveBeenCalledWith(poison, false, false);
+    expect(onError).toHaveBeenCalledTimes(2);
+    expect(onError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+  });
 });

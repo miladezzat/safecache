@@ -15,7 +15,8 @@ export interface SafeCacheDynamicModule {
   providers: Array<{
     provide: symbol | typeof SafeCacheService;
     useValue?: Cache | SafeCacheService;
-    useFactory?: () => Promise<Cache | SafeCacheService> | Cache | SafeCacheService;
+    useFactory?: (...args: Cache[]) => Promise<Cache | SafeCacheService> | Cache | SafeCacheService;
+    inject?: Array<symbol | typeof SafeCacheService>;
   }>;
   exports: Array<symbol | typeof SafeCacheService>;
 }
@@ -45,19 +46,14 @@ export class SafeCacheModule {
   }
 
   static forRootAsync(options: SafeCacheAsyncOptions): SafeCacheDynamicModule {
-    let cachePromise: Promise<Cache> | undefined;
-    const getCache = () => {
-      cachePromise ??= Promise.resolve(options.useFactory());
-      return cachePromise;
-    };
-
     return {
       module: SafeCacheModule,
       providers: [
-        { provide: SAFE_CACHE, useFactory: getCache },
+        { provide: SAFE_CACHE, useFactory: options.useFactory },
         {
           provide: SafeCacheService,
-          useFactory: async () => new SafeCacheService(await getCache()),
+          useFactory: (cache: Cache) => new SafeCacheService(cache),
+          inject: [SAFE_CACHE],
         },
       ],
       exports: [SAFE_CACHE, SafeCacheService],

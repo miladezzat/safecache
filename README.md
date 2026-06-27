@@ -131,33 +131,33 @@ Use a smaller tool instead when:
 
 ## Packages
 
-| Package                      | Purpose                                                           | Maturity      |
-| ---------------------------- | ----------------------------------------------------------------- | ------------- |
-| `@safecache/core`            | Cache engine, contracts, TTL, tags, invalidation, safety behavior | Core          |
-| `@safecache/memory`          | In-memory provider and tag index                                  | Core          |
-| `@safecache/testing`         | Test helpers and in-memory cache factories                        | Core          |
-| `@safecache/redis`           | Redis provider and Redis tag index                                | Distributed   |
-| `@safecache/locks`           | Redis `SET NX PX` lock adapter                                    | Distributed   |
-| `@safecache/pubsub`          | Redis Pub/Sub event bus                                           | Distributed   |
-| `@safecache/events`          | In-process event bus utilities                                    | Distributed   |
-| `@safecache/serializers`     | JSON, SuperJSON-style, and msgpack-style serializer entry points  | Provider      |
-| `@safecache/valkey`          | Valkey-compatible provider export                                 | Provider      |
-| `@safecache/memcached`       | Memcached provider                                                | Provider      |
-| `@safecache/decorators`      | `@Cached` and `@CacheSync` helpers                                | DX            |
-| `@safecache/express`         | Express request integration                                       | DX            |
-| `@safecache/fastify`         | Fastify plugin integration                                        | DX            |
-| `@safecache/nestjs`          | NestJS module and service integration                             | DX            |
-| `@safecache/prisma`          | Prisma mutation invalidation plugin                               | ORM           |
-| `@safecache/mongoose`        | Mongoose mutation invalidation hooks                              | ORM           |
-| `@safecache/mongodb-streams` | MongoDB change stream invalidation                                | Magic sync    |
-| `@safecache/postgres-outbox` | Postgres outbox invalidation worker                               | Magic sync    |
-| `@safecache/metrics`         | Metrics collector and Prometheus output                           | Observability |
-| `@safecache/cli`             | `safecache` operational CLI                                       | Observability |
-| `@safecache/dashboard`       | Read-only dashboard primitives                                    | Observability |
-| `@safecache/kafka`           | Kafka event bus adapter                                           | Advanced      |
-| `@safecache/nats`            | NATS event bus adapter                                            | Advanced      |
-| `@safecache/rabbitmq`        | RabbitMQ event bus adapter                                        | Advanced      |
-| `@safecache/aws-events`      | AWS event bus adapter                                             | Advanced      |
+| Package                      | Purpose                                                              | Maturity      |
+| ---------------------------- | -------------------------------------------------------------------- | ------------- |
+| `@safecache/core`            | Cache engine, contracts, TTL, tags, invalidation, safety behavior    | Core          |
+| `@safecache/memory`          | In-memory provider and tag index                                     | Core          |
+| `@safecache/testing`         | Test helpers and in-memory cache factories                           | Core          |
+| `@safecache/redis`           | Redis provider and Redis tag index                                   | Distributed   |
+| `@safecache/locks`           | Redis `SET NX PX` lock adapter                                       | Distributed   |
+| `@safecache/pubsub`          | Redis Pub/Sub event bus                                              | Distributed   |
+| `@safecache/events`          | In-process event bus utilities                                       | Distributed   |
+| `@safecache/serializers`     | JSON, a date-aware JSON serializer, and a JSON-over-bytes serializer | Provider      |
+| `@safecache/valkey`          | Valkey-compatible provider export                                    | Provider      |
+| `@safecache/memcached`       | Memcached provider                                                   | Provider      |
+| `@safecache/decorators`      | `@Cached` and `@CacheSync` helpers                                   | DX            |
+| `@safecache/express`         | Express request integration                                          | DX            |
+| `@safecache/fastify`         | Fastify plugin integration                                           | DX            |
+| `@safecache/nestjs`          | NestJS module and service integration                                | DX            |
+| `@safecache/prisma`          | Prisma mutation invalidation plugin                                  | ORM           |
+| `@safecache/mongoose`        | Mongoose mutation invalidation hooks                                 | ORM           |
+| `@safecache/mongodb-streams` | MongoDB change stream invalidation                                   | Magic sync    |
+| `@safecache/postgres-outbox` | Postgres outbox invalidation worker                                  | Magic sync    |
+| `@safecache/metrics`         | Metrics collector and Prometheus output                              | Observability |
+| `@safecache/cli`             | `safecache` operational CLI                                          | Observability |
+| `@safecache/dashboard`       | Read-only dashboard primitives                                       | Observability |
+| `@safecache/kafka`           | Kafka event bus adapter                                              | Advanced      |
+| `@safecache/nats`            | NATS event bus adapter                                               | Advanced      |
+| `@safecache/rabbitmq`        | RabbitMQ event bus adapter                                           | Advanced      |
+| `@safecache/aws-events`      | AWS event bus adapter                                                | Advanced      |
 
 ## Safety Model
 
@@ -179,21 +179,58 @@ SafeCache is not trying to replace every cache tool. It is best when caching is 
 correctness: reads need consistent cache-aside behavior, writes need predictable invalidation, and
 multiple app instances need coordinated cache state.
 
-| Tool                                   | Best fit                                                 | What SafeCache adds                                               | When to choose the other tool                                       |
-| -------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `cache-manager`                        | Mature general-purpose cache wrapper with store adapters | Tags, `mutate()`, safety defaults, distributed coordination, DX   | You want an established generic wrapper and can own invalidation    |
-| Keyv                                   | Small async key-value abstraction with TTL and adapters  | Cache-aside workflow, tag invalidation, stampede protection       | You only need portable `get`/`set` storage                          |
-| `node-cache`                           | Simple in-process TTL cache                              | Namespaces, tags, fail-open fetchers, events, multi-layer caching | One Node.js process owns the data and local TTL is enough           |
-| `lru-cache`                            | Fast in-process bounded LRU cache                        | Application read/write workflows around the storage layer         | You need a local eviction policy, not distributed cache behavior    |
-| Raw Redis clients (`redis`, `ioredis`) | Direct Redis commands and Redis data structures          | Provider contracts, serialization, locks, Pub/Sub invalidation    | Redis commands are the API you want to write directly               |
-| NestJS CacheModule                     | Framework-level cache integration                        | Framework-independent cache engine with explicit app semantics    | Route/method caching is enough for your NestJS app                  |
-| Decorator cache packages               | Terse method-level caching                               | Optional decorators backed by explicit `query()` and invalidation | You prefer decorators only and do not need a broader cache contract |
-| SWR helpers                            | Serving stale data while refreshing                      | SWR plus mutation invalidation, tags, locks, metrics, providers   | Stale-while-revalidate is the only behavior you need                |
+| Tool                                   | Best fit                                                                               | What SafeCache adds                                                                                                                 | When to choose the other tool                                                        |
+| -------------------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `cache-manager`                        | Mature general-purpose cache wrapper with store adapters                               | Tags, `mutate()`, explicit safety contracts, distributed coordination, DX                                                           | You want an established generic wrapper and can own invalidation                     |
+| Keyv                                   | Small async key-value abstraction with TTL and adapters                                | Cache-aside workflow, tag invalidation, stampede protection                                                                         | You want portable `get`/`set` storage with TTL, namespacing, and pluggable backends  |
+| `node-cache`                           | Simple in-process TTL cache                                                            | Namespaces, tags, fail-open fetchers, distributed invalidation events, multi-layer caching                                          | One Node.js process owns the data and local TTL is enough                            |
+| `lru-cache`                            | Fast in-process bounded LRU cache (with native `fetch()` coalescing and stale serving) | Tags, mutation-aware invalidation, and distributed coordination around the storage layer                                            | You need a local eviction policy, not distributed cache behavior                     |
+| Raw Redis clients (`redis`, `ioredis`) | Direct Redis commands and Redis data structures                                        | Provider contracts, serialization, locks, Pub/Sub invalidation                                                                      | Redis commands are the API you want to write directly                                |
+| NestJS CacheModule                     | Framework-level cache integration                                                      | Framework-independent cache engine with explicit app semantics                                                                      | Route/method caching plus a store-backed cache manager is enough for your NestJS app |
+| Decorator cache packages               | Terse method-level caching                                                             | Optional decorators backed by explicit `query()` and invalidation                                                                   | You prefer decorators only and do not need a broader cache contract                  |
+| SWR helpers                            | Serving stale data while refreshing                                                    | SWR plus mutation-aware invalidation, tags, distributed locks/events, a metrics exporter, and a cross-provider multi-layer contract | Stale-while-revalidate is the only behavior you need                                 |
+
+### Feature matrix
+
+Competitor grades reflect cache-manager v7.x (Keyv-based), keyv v5.x, node-cache v5.x,
+lru-cache v11.x, and node-redis v6 / ioredis v5 as of mid-2026.
+
+| Feature                         | SafeCache | cache-manager (v7)          | Keyv (v5)      | node-cache (v5) | lru-cache (v11) | Raw Redis clients |
+| ------------------------------- | --------- | --------------------------- | -------------- | --------------- | --------------- | ----------------- |
+| Cache-aside `query()` API       | Yes       | Partial (`wrap`)            | Manual         | Manual          | Via `fetch()`   | Manual            |
+| `wrap()` convenience API        | Yes       | Yes                         | Manual         | Manual          | Manual          | Manual            |
+| Mutation-aware invalidation     | Yes       | Manual                      | Manual         | Manual          | Manual          | Manual            |
+| Tag invalidation                | Yes       | Store/custom-code dependent | No             | Manual          | Manual          | Manual            |
+| Namespace-aware keys            | Yes       | Via Keyv namespace          | Yes (native)   | Manual          | Manual          | Manual            |
+| Tenant-aware keys               | Yes       | Manual                      | Manual         | Manual          | Manual          | Manual            |
+| Local stampede protection       | Yes       | Yes (`wrap` coalescing)     | Manual         | Manual          | Yes (`fetch()`) | Manual            |
+| Distributed lock support        | Yes       | Adapter/custom              | Manual         | No              | No              | Manual            |
+| Distributed invalidation events | Yes       | Adapter/custom              | Manual         | No              | No              | Manual            |
+| Fail-open behavior              | Yes       | Manual                      | Manual         | Manual          | Manual          | Manual            |
+| Provider circuit breaker        | Yes¹      | Manual                      | Manual         | Manual          | Manual          | Manual            |
+| Stale-while-revalidate          | Yes       | Yes (`refreshThreshold`)    | Manual         | Manual          | Yes (`fetch()`) | Manual            |
+| Refresh-ahead                   | Yes       | Yes (`refreshThreshold`)    | Manual         | Manual          | Manual²         | Manual            |
+| Version checks                  | Yes³      | Manual                      | Manual         | Manual          | Manual          | Manual            |
+| Runtime events and stats        | Yes       | Limited/custom              | Limited/custom | Limited/custom  | Limited/custom  | Manual            |
+| Prometheus-style metrics        | Yes       | Manual                      | Manual         | Manual          | Manual          | Manual            |
+| Testing utilities               | Yes       | Manual                      | Manual         | Manual          | Manual          | Manual            |
+| Optional DB-change sync         | Yes       | No                          | No             | No              | No              | Manual            |
+
+Wording: `Manual` = you can build it, but it is not the tool's primary abstraction; `Limited/custom` =
+exists in some combinations or userland code, not a consistent cross-provider contract; `No` =
+intentionally scoped elsewhere.
+
+- **¹** SafeCache's circuit breaker is two-state (open/closed, consecutive-failure); it does not yet
+  probe with a half-open trial request before fully reopening.
+- **²** `lru-cache` refreshes on stale access via `allowStale`, but does not do proactive pre-expiry
+  refresh-ahead.
+- **³** SafeCache version checks are best-effort optimistic guards (non-atomic read-then-write), not a
+  transactional compare-and-set.
 
 In short: use smaller tools for simple storage. Use SafeCache when you need a shared caching layer
 with safety rules, invalidation, distributed behavior, and observability.
 
-See [Caching Comparisons](docs/comparisons.md) for the full, more detailed comparison matrix.
+See [Caching Comparisons](docs/comparisons.md) for the per-tool write-ups and positioning notes.
 
 ## Documentation
 

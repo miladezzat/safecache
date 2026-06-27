@@ -112,6 +112,45 @@ class InlineEventBus implements CacheEventBus {
   }
 }
 
+// Mutates the event payload after it was signed, simulating an on-the-wire tamper.
+class TamperingEventBus extends InlineEventBus {
+  override async publish(event: CacheEvent) {
+    await super.publish({ ...event, key: "user:HIJACKED", tag: "user:HIJACKED" });
+  }
+}
+
+// A provider that honors ttl: keys physically disappear from get() once their stored
+// lifetime has elapsed (as Redis/Valkey/Memcached would), driven by a shared clock.
+class TtlHonoringProvider implements CacheProvider {
+  readonly name = "ttl-honoring";
+  readonly values = new Map<string, string | Uint8Array>();
+  private readonly expiries = new Map<string, number>();
+  lastTtlMs = -1;
+
+  constructor(private readonly clock: { now(): number }) {}
+
+  async get(key: string) {
+    const expiry = this.expiries.get(key);
+    if (expiry !== undefined && this.clock.now() >= expiry) {
+      this.values.delete(key);
+      this.expiries.delete(key);
+      return null;
+    }
+    return this.values.get(key) ?? null;
+  }
+
+  async set(key: string, value: string | Uint8Array, options: { ttlMs: number }) {
+    this.lastTtlMs = options.ttlMs;
+    this.values.set(key, value);
+    this.expiries.set(key, this.clock.now() + options.ttlMs);
+  }
+
+  async delete(key: string) {
+    this.values.delete(key);
+    this.expiries.delete(key);
+  }
+}
+
 class SharedMemoryLock implements CacheLock {
   private readonly locked = new Set<string>();
 
@@ -252,6 +291,27 @@ describe("createCache", () => {
     });
 
     await expect(cache.query({ key: "k", fetcher: async () => "fresh" })).rejects.toThrow("down");
+  });
+
+  test("failOpen:false rethrows read errors while still recording the circuit-breaker failure", async () => {
+    const clock = new ManualClock();
+    const provider = new RawMapProvider();
+    provider.getError = new Error("down");
+    const cache = createCache({
+      namespace: "app",
+      provider,
+      clock,
+      defaultTtl: "1m",
+      safety: {
+        failOpen: false,
+        circuitBreaker: { enabled: true, failureThreshold: 1, resetAfter: "10ms" },
+      },
+    });
+
+    // failOpen:false must propagate the provider read error instead of degrading.
+    await expect(cache.query({ key: "k", fetcher: async () => "fresh" })).rejects.toThrow("down");
+    // Bookkeeping must still run: the single failure trips the threshold-1 breaker.
+    expect(cache.stats().circuitBreakerOpen).toBe(true);
   });
 
   test("fetcher and action errors propagate", async () => {
@@ -506,5 +566,247 @@ describe("createCache", () => {
     };
 
     expect(jsonSerializer().deserialize(jsonSerializer().serialize(entry))).toEqual(entry);
+  });
+
+  test("lock holder re-checks cache after acquiring and skips origin when a peer populated it", async () => {
+    const provider = new RawMapProvider();
+    // The lock grants immediately, but as a side effect (simulating a peer that won
+    // the race) it writes a fresh entry into the shared provider during acquire().
+    const lock: CacheLock = {
+      async acquire(key: string): Promise<CacheLockHandle> {
+        const entry = {
+          value: "peer-value",
+          tags: [],
+          createdAt: 0,
+          expiresAt: Date.now() + 60_000,
+        };
+        provider.values.set(key, JSON.stringify(entry));
+        return { release: async () => {} };
+      },
+    };
+    const cache = createCache({
+      namespace: "app",
+      provider,
+      defaultTtl: "1m",
+      distributed: { lock },
+    });
+    const fetcher = vi.fn(async () => "origin-value");
+
+    await expect(cache.query({ key: "race", lock: true, fetcher })).resolves.toBe("peer-value");
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  test("distributed lock is fail-open: acquire failure falls back to a direct fetch", async () => {
+    const provider = new RawMapProvider();
+    const lock: CacheLock = {
+      async acquire(): Promise<CacheLockHandle | null> {
+        throw new Error("lock backend unavailable");
+      },
+    };
+    const cache = createCache({
+      namespace: "app",
+      provider,
+      defaultTtl: "1m",
+      distributed: { lock },
+    });
+    const errors: string[] = [];
+    cache.on("error", (event) => {
+      if (event.type === "error") {
+        errors.push(event.error.message);
+      }
+    });
+    const fetcher = vi.fn(async () => "fresh");
+
+    await expect(cache.query({ key: "k", lock: true, fetcher })).resolves.toBe("fresh");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(errors).toContain("lock backend unavailable");
+  });
+
+  test("SWR persists the stale-inclusive ttl to a TTL-honoring store", async () => {
+    const clock = new ManualClock();
+    const provider = new TtlHonoringProvider(clock);
+    const cache = createCache({
+      namespace: "app",
+      provider,
+      clock,
+      defaultTtl: "10ms",
+      safety: { staleWhileRevalidate: true },
+    });
+    const fetcher = vi.fn(async () => `value-${clock.now()}`);
+
+    await cache.query({ key: "page", staleWhileRevalidate: "5ms", fetcher });
+
+    // The physical ttl handed to the provider must cover ttl (10) + stale (5) = 15ms,
+    // not the base 10ms, otherwise a TTL-honoring store evicts before the stale window.
+    expect(provider.lastTtlMs).toBe(15);
+
+    // Past the logical expiry (10ms) but inside the stale window (<15ms): the entry must
+    // still be physically present on a TTL-honoring store so it can be served stale.
+    clock.advance(11);
+    expect(await provider.get("app::page")).not.toBeNull();
+    await expect(cache.query({ key: "page", staleWhileRevalidate: "5ms", fetcher })).resolves.toBe(
+      "value-0",
+    );
+  });
+
+  test("a TTL-honoring store evicts a non-SWR entry once the base ttl elapses", async () => {
+    const clock = new ManualClock();
+    const provider = new TtlHonoringProvider(clock);
+    const cache = createCache({ namespace: "app", provider, clock, defaultTtl: "10ms" });
+
+    await cache.query({ key: "page", fetcher: async () => "v" });
+    expect(await provider.get("app::page")).not.toBeNull();
+
+    clock.advance(10);
+    // No SWR window, so the physical ttl is the base ttl and the store evicts it.
+    expect(await provider.get("app::page")).toBeNull();
+  });
+
+  test("non-SWR writes keep the base ttl on a TTL-honoring store", async () => {
+    const clock = new ManualClock();
+    const provider = new TtlHonoringProvider(clock);
+    const cache = createCache({ namespace: "app", provider, clock, defaultTtl: "10ms" });
+
+    await cache.query({ key: "k", fetcher: async () => "v" });
+
+    expect(provider.lastTtlMs).toBe(10);
+  });
+
+  test("concurrent stale reads trigger exactly one background refresh", async () => {
+    const clock = new ManualClock();
+    const cache = createCache({
+      namespace: "app",
+      provider: new RawMapProvider(),
+      clock,
+      defaultTtl: "10ms",
+      safety: { staleWhileRevalidate: true },
+    });
+    let resolveRefresh: ((value: string) => void) | undefined;
+    const fetcher = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveRefresh = resolve;
+        }),
+    );
+
+    // Seed the cache with an initial value, then move into the stale window.
+    fetcher.mockResolvedValueOnce("seed");
+    await cache.query({ key: "hot", staleWhileRevalidate: "1m", fetcher });
+    clock.advance(11);
+
+    // Two concurrent stale reads should coalesce into a single background refresh.
+    const reads = await Promise.all([
+      cache.query({ key: "hot", staleWhileRevalidate: "1m", fetcher }),
+      cache.query({ key: "hot", staleWhileRevalidate: "1m", fetcher }),
+    ]);
+    expect(reads).toEqual(["seed", "seed"]);
+
+    // One seed call + exactly one refresh call (not two).
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    resolveRefresh?.("refreshed");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(cache.stats().refreshes).toBe(1);
+  });
+
+  test("signed events are accepted by a peer sharing the secret", async () => {
+    const bus = new InlineEventBus();
+    const providerA = new RawMapProvider();
+    const providerB = new RawMapProvider();
+    const cacheA = createCache({
+      namespace: "app",
+      source: "a",
+      provider: providerA,
+      defaultTtl: "1m",
+      distributed: { events: bus, signingSecret: "s3cret" },
+    });
+    const cacheB = createCache({
+      namespace: "app",
+      source: "b",
+      provider: providerB,
+      defaultTtl: "1m",
+      distributed: { events: bus, signingSecret: "s3cret" },
+    });
+
+    await cacheB.query({ key: "user:1", tags: ["user:1"], fetcher: async () => "b-old" });
+    await cacheA.invalidateByTag("user:1");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(bus.published[0]?.signature).toBeTypeOf("string");
+    await expect(
+      cacheB.query({ key: "user:1", tags: ["user:1"], fetcher: async () => "b-new" }),
+    ).resolves.toBe("b-new");
+  });
+
+  test("tampered events are dropped and counted", async () => {
+    const bus = new TamperingEventBus();
+    const providerA = new RawMapProvider();
+    const providerB = new RawMapProvider();
+    const cacheA = createCache({
+      namespace: "app",
+      source: "a",
+      provider: providerA,
+      defaultTtl: "1m",
+      distributed: { events: bus, signingSecret: "s3cret" },
+    });
+    const cacheB = createCache({
+      namespace: "app",
+      source: "b",
+      provider: providerB,
+      defaultTtl: "1m",
+      distributed: { events: bus, signingSecret: "s3cret" },
+    });
+    const errors: string[] = [];
+    cacheB.on("error", (event) => {
+      if (event.type === "error") {
+        errors.push(event.error.message);
+      }
+    });
+
+    await cacheB.query({ key: "user:1", tags: ["user:1"], fetcher: async () => "b-old" });
+    await cacheA.invalidateByTag("user:1");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The tampered event must NOT have invalidated cacheB.
+    await expect(
+      cacheB.query({ key: "user:1", tags: ["user:1"], fetcher: async () => "b-new" }),
+    ).resolves.toBe("b-old");
+    expect(errors.some((message) => message.includes("signature"))).toBe(true);
+    expect(cacheB.stats().errors).toBeGreaterThan(0);
+  });
+
+  test("unsigned events are dropped when a secret is configured", async () => {
+    const bus = new InlineEventBus();
+    const providerB = new RawMapProvider();
+    const cacheB = createCache({
+      namespace: "app",
+      source: "b",
+      provider: providerB,
+      defaultTtl: "1m",
+      distributed: { events: bus, signingSecret: "s3cret" },
+    });
+    const errors: string[] = [];
+    cacheB.on("error", (event) => {
+      if (event.type === "error") {
+        errors.push(event.error.message);
+      }
+    });
+
+    await cacheB.query({ key: "user:1", tags: ["user:1"], fetcher: async () => "b-old" });
+
+    // An attacker publishes an unsigned invalidation directly onto the bus.
+    await bus.publish({
+      id: "forged-1",
+      type: "invalidate:tag",
+      source: "attacker",
+      timestamp: Date.now(),
+      namespace: "app",
+      tag: "user:1",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await expect(
+      cacheB.query({ key: "user:1", tags: ["user:1"], fetcher: async () => "b-new" }),
+    ).resolves.toBe("b-old");
+    expect(errors.some((message) => message.includes("signature"))).toBe(true);
   });
 });
