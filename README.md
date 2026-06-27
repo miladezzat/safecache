@@ -173,15 +173,27 @@ Default behavior is intentionally conservative:
 - Stale values are returned only when stale-while-revalidate is configured.
 - Namespaces and tenants are part of key generation.
 
-## Comparison
+## Caching Comparisons
 
-Use `lru-cache`, `node-cache`, or raw Redis when you only need a simple storage primitive. Use
-SafeCache when you need the application-level caching layer around those primitives: cache-aside
-reads, mutation-aware invalidation, tags, stampede protection, distributed events, fail-open
-behavior, and observability.
+SafeCache is not trying to replace every cache tool. It is best when caching is part of application
+correctness: reads need consistent cache-aside behavior, writes need predictable invalidation, and
+multiple app instances need coordinated cache state.
 
-See [Caching Comparisons](docs/comparisons.md) for a detailed comparison with `cache-manager`,
-Keyv, `node-cache`, `lru-cache`, Redis clients, decorator libraries, and framework cache modules.
+| Tool                                   | Best fit                                                 | What SafeCache adds                                               | When to choose the other tool                                       |
+| -------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `cache-manager`                        | Mature general-purpose cache wrapper with store adapters | Tags, `mutate()`, safety defaults, distributed coordination, DX   | You want an established generic wrapper and can own invalidation    |
+| Keyv                                   | Small async key-value abstraction with TTL and adapters  | Cache-aside workflow, tag invalidation, stampede protection       | You only need portable `get`/`set` storage                          |
+| `node-cache`                           | Simple in-process TTL cache                              | Namespaces, tags, fail-open fetchers, events, multi-layer caching | One Node.js process owns the data and local TTL is enough           |
+| `lru-cache`                            | Fast in-process bounded LRU cache                        | Application read/write workflows around the storage layer         | You need a local eviction policy, not distributed cache behavior    |
+| Raw Redis clients (`redis`, `ioredis`) | Direct Redis commands and Redis data structures          | Provider contracts, serialization, locks, Pub/Sub invalidation    | Redis commands are the API you want to write directly               |
+| NestJS CacheModule                     | Framework-level cache integration                        | Framework-independent cache engine with explicit app semantics    | Route/method caching is enough for your NestJS app                  |
+| Decorator cache packages               | Terse method-level caching                               | Optional decorators backed by explicit `query()` and invalidation | You prefer decorators only and do not need a broader cache contract |
+| SWR helpers                            | Serving stale data while refreshing                      | SWR plus mutation invalidation, tags, locks, metrics, providers   | Stale-while-revalidate is the only behavior you need                |
+
+In short: use smaller tools for simple storage. Use SafeCache when you need a shared caching layer
+with safety rules, invalidation, distributed behavior, and observability.
+
+See [Caching Comparisons](docs/comparisons.md) for the full, more detailed comparison matrix.
 
 ## Documentation
 
