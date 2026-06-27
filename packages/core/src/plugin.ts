@@ -14,7 +14,21 @@ export class PluginRegistry {
       return;
     }
     this.plugins.set(plugin.name, plugin);
-    void plugin.setup({ cache: this.cache, emit: this.emit });
+    try {
+      void Promise.resolve(plugin.setup({ cache: this.cache, emit: this.emit })).catch((error) => {
+        this.emit({
+          type: "error",
+          operation: `plugin:${plugin.name}:setup`,
+          error: toError(error),
+        });
+      });
+    } catch (error) {
+      this.emit({
+        type: "error",
+        operation: `plugin:${plugin.name}:setup`,
+        error: toError(error),
+      });
+    }
   }
 
   async shutdown(): Promise<void> {
@@ -26,4 +40,8 @@ export class PluginRegistry {
       await plugin.shutdown?.();
     }
   }
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }

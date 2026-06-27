@@ -1,11 +1,50 @@
 # @safecache/dashboard
 
-Read-only SafeCache dashboard renderer.
+Read-only dashboard primitives for SafeCache metrics, health, errors, and hot keys.
+
+SafeCache packages are currently published as `0.1.0`. APIs are usable but may change before `1.0`.
+
+## Install
+
+```bash
+pnpm add @safecache/dashboard
+```
+
+## Usage
 
 ```ts
-import { createDashboard, createEmptyDashboardSnapshot } from "@safecache/dashboard";
+import { createDashboard } from "@safecache/dashboard";
 
 const dashboard = createDashboard({
-  snapshot: async () => createEmptyDashboardSnapshot(),
+  readOnly: true,
+  snapshot: async () => snapshotFromMetrics(),
 });
+
+const response = await dashboard.handle({ method: "GET", path: "/api/snapshot" });
 ```
+
+## API
+
+- `createDashboard`
+- `createEmptyDashboardSnapshot`
+- `renderDashboard`
+
+## When To Use This
+
+Use this package when you want an embeddable read-only dashboard endpoint for SafeCache operational state.
+
+## Production Notes
+
+Keep the dashboard internal. It can expose key names, tags, errors, and operational metadata.
+
+## Related Packages
+
+- `@safecache/core`
+- `@safecache/metrics`
+- `@safecache/cli`
+
+## Documentation
+
+- [Dashboard](../../docs/dashboard.md)
+- [Metrics](../../docs/metrics.md)
+- [SafeCache README](../../README.md)

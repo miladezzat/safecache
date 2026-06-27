@@ -1,4 +1,50 @@
 # @safecache/postgres-outbox
 
-Postgres outbox invalidation processor for SafeCache. Rows are marked processed only after cache
-invalidation succeeds.
+Postgres outbox worker for durable cache invalidation events.
+
+SafeCache packages are currently published as `0.1.0`. APIs are usable but may change before `1.0`.
+
+## Install
+
+```bash
+pnpm add @safecache/postgres-outbox @safecache/core
+```
+
+## Usage
+
+```ts
+import { postgresOutbox } from "@safecache/postgres-outbox";
+
+cache.use(
+  postgresOutbox({
+    client,
+    pollIntervalMs: 1_000,
+    pollOnStart: true,
+  }),
+);
+```
+
+## API
+
+- `postgresOutbox`
+- `createPostgresOutbox`
+- `cacheOutboxTableSql`
+
+## When To Use This
+
+Use this package when database transactions write cache invalidation records that should be retried until processed.
+
+## Production Notes
+
+Write outbox rows in the same transaction as the data change. Monitor retry counts and `last_error` for stuck invalidations.
+
+## Related Packages
+
+- `@safecache/core`
+- `@safecache/mongodb-streams`
+
+## Documentation
+
+- [Postgres Outbox](../../docs/postgres-outbox.md)
+- [Tags And Invalidation](../../docs/tags-and-invalidation.md)
+- [SafeCache README](../../README.md)

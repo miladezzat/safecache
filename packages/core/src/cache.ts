@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { CircuitBreaker } from "./circuit-breaker";
 import { parseDuration } from "./duration";
 import { RuntimeEvents } from "./events";
@@ -8,7 +9,9 @@ import { SingleFlight } from "./single-flight";
 import type {
   Cache,
   CacheEntry,
+  CacheEvent,
   CacheLayer,
+  CacheLockHandle,
   CacheOptions,
   CachePlugin,
   CacheProvider,
@@ -31,6 +34,9 @@ type ReadResult<T> =
 const systemClock: Clock = {
   now: () => Date.now(),
 };
+
+const DEFAULT_LOCK_TTL_MS = 30_000;
+const LOCK_POLL_INTERVAL_MS = 10;
 
 export function createCache(options: CacheOptions): Cache {
   return new SafeCache(options);
@@ -96,7 +102,7 @@ class SafeCache implements Cache {
     this.counters.misses += 1;
     this.emit({ type: "miss", key: query.key, tenant: query.tenant });
 
-    const load = () => this.fetchAndStore(query, scopedKey, ttlMs);
+    const load = () => this.fetchAndStoreWithDistributedLock(query, scopedKey, ttlMs);
     if (this.options.safety?.preventStampede ?? true) {
       return this.singleFlight.run(scopedKey, load);
     }
@@ -231,6 +237,9 @@ class SafeCache implements Cache {
         }
       } catch (error) {
         this.recordError("deserialize", error, query.key, query.tenant);
+        if (!this.failOpen) {
+          throw error;
+        }
       }
     }
 
@@ -248,17 +257,80 @@ class SafeCache implements Cache {
     }
 
     const version = await resolveVersion(query.version, value);
+    const now = this.clock.now();
+    const staleUntil = this.resolveStaleUntil(query, ttlMs);
     const entry: CacheEntry<T> = {
       value,
       tags: query.tags ?? [],
-      createdAt: this.clock.now(),
-      expiresAt: this.clock.now() + ttlMs,
-      staleUntil: this.resolveStaleUntil(query, ttlMs),
+      createdAt: now,
+      expiresAt: now + ttlMs,
+      staleUntil,
       ...(version === undefined ? {} : { version }),
     };
 
-    await this.writeEntry(scopedKey, entry, ttlMs, query.tenant);
+    // Persist a physical lifetime that covers the stale-while-revalidate window so
+    // TTL-honoring stores (Redis/Valkey/Memcached) do not evict the key before the
+    // logical stale window elapses. Logical hit/stale/miss classification still uses
+    // expiresAt/staleUntil inside the entry. Non-SWR behavior is unchanged.
+    const physicalTtlMs = this.resolvePhysicalTtl(now, ttlMs, staleUntil);
+
+    await this.writeEntry(scopedKey, entry, physicalTtlMs, query.tenant);
     return value;
+  }
+
+  private resolvePhysicalTtl(now: number, ttlMs: number, staleUntil: number | undefined): number {
+    if (staleUntil === undefined) {
+      return ttlMs;
+    }
+    return Math.max(ttlMs, staleUntil - now);
+  }
+
+  private async fetchAndStoreWithDistributedLock<T>(
+    query: QueryOptions<T>,
+    scopedKey: string,
+    ttlMs: number,
+  ): Promise<T> {
+    const lock = this.options.distributed?.lock;
+    const shouldUseLock = query.lock ?? Boolean(lock);
+    if (!shouldUseLock || !lock) {
+      return this.fetchAndStore(query, scopedKey, ttlMs);
+    }
+
+    let handle: CacheLockHandle | null;
+    try {
+      handle = await this.withTimeout(
+        () => lock.acquire(scopedKey, this.resolveLockTtl(query)),
+        query.timeout,
+      );
+    } catch (error) {
+      this.recordError("lock", error, query.key, query.tenant);
+      if (!this.failOpen) {
+        throw error;
+      }
+      return this.fetchAndStore(query, scopedKey, ttlMs);
+    }
+
+    if (handle) {
+      try {
+        // Another process may have populated the cache between our initial read and
+        // acquiring the lock. Re-check the layers before hitting the origin so the
+        // lock holder also benefits from a peer's freshly stored value.
+        const recheck = await this.readLayers<T>(query, scopedKey);
+        if (recheck.state === "hit" || (recheck.state === "stale" && this.canServeStale(query))) {
+          return recheck.entry.value;
+        }
+        return await this.fetchAndStore(query, scopedKey, ttlMs);
+      } finally {
+        await this.releaseLock(handle, query);
+      }
+    }
+
+    const peerRead = await this.waitForPeerRefresh<T>(query, scopedKey);
+    if (peerRead.state === "hit" || (peerRead.state === "stale" && this.canServeStale(query))) {
+      return peerRead.entry.value;
+    }
+
+    return this.fetchAndStore(query, scopedKey, ttlMs);
   }
 
   private async writeEntry<T>(
@@ -272,6 +344,9 @@ class SafeCache implements Cache {
       raw = this.serializer.serialize(entry);
     } catch (error) {
       this.recordError("serialize", error, scopedKey, tenant);
+      if (!this.failOpen) {
+        throw error;
+      }
       return;
     }
 
@@ -348,8 +423,13 @@ class SafeCache implements Cache {
   }
 
   private refreshInBackground<T>(query: QueryOptions<T>, scopedKey: string, ttlMs: number): void {
-    void this.fetchAndStore(query, scopedKey, ttlMs)
-      .then(() => {
+    // Coalesce background refreshes for a hot key so SWR + refresh-ahead never spawn
+    // an unbounded number of concurrent origin fetches. A distinct key keeps the
+    // background refresh independent of any foreground single-flight on the same key,
+    // and the bookkeeping lives inside the task so it runs exactly once per real fetch.
+    void this.singleFlight
+      .run(`refresh:${scopedKey}`, async () => {
+        await this.fetchAndStore(query, scopedKey, ttlMs);
         this.counters.refreshes += 1;
         this.emit({ type: "refresh", key: query.key, tenant: query.tenant });
       })
@@ -392,6 +472,9 @@ class SafeCache implements Cache {
     } catch (error) {
       this.circuitBreaker.recordFailure();
       this.recordError("get", error, query.key, query.tenant);
+      if (!this.failOpen) {
+        throw error;
+      }
       return null;
     }
   }
@@ -410,6 +493,9 @@ class SafeCache implements Cache {
     } catch (error) {
       this.circuitBreaker.recordFailure();
       this.recordError("set", error, scopedKey);
+      if (!this.failOpen) {
+        throw error;
+      }
     }
   }
 
@@ -484,6 +570,40 @@ class SafeCache implements Cache {
     this.events.emit(event);
   }
 
+  private async waitForPeerRefresh<T>(
+    query: QueryOptions<T>,
+    scopedKey: string,
+  ): Promise<ReadResult<T>> {
+    const deadline = Date.now() + this.resolveLockTtl(query);
+    while (Date.now() < deadline) {
+      await delay(LOCK_POLL_INTERVAL_MS);
+      const read = await this.readLayers<T>(query, scopedKey);
+      if (read.state === "hit" || (read.state === "stale" && this.canServeStale(query))) {
+        return read;
+      }
+    }
+    return { state: "miss" };
+  }
+
+  private async releaseLock<T>(handle: CacheLockHandle, query: QueryOptions<T>): Promise<void> {
+    try {
+      await handle.release();
+    } catch (error) {
+      this.recordError("lock:release", error, query.key, query.tenant);
+      if (!this.failOpen) {
+        throw error;
+      }
+    }
+  }
+
+  private resolveLockTtl<T>(query: QueryOptions<T>): number {
+    return query.timeout ? parseDuration(query.timeout, "timeout") : DEFAULT_LOCK_TTL_MS;
+  }
+
+  private get failOpen(): boolean {
+    return this.options.safety?.failOpen ?? true;
+  }
+
   private subscribeToDistributedEvents(): void {
     const bus = this.options.distributed?.events;
     if (!bus) {
@@ -494,14 +614,18 @@ class SafeCache implements Cache {
         if (event.namespace !== this.options.namespace || event.source === this.source) {
           return;
         }
+        if (!this.verifyIncomingEvent(event)) {
+          return;
+        }
         if (this.hasSeenEvent(event.id)) {
           return;
         }
-        if (event.type === "invalidate:key" && event.key) {
-          await this.invalidateKeyInternal(event.key, { tenant: event.tenant }, false);
+        const tenant = typeof event.tenant === "string" ? event.tenant : undefined;
+        if (event.type === "invalidate:key" && typeof event.key === "string") {
+          await this.invalidateKeyInternal(event.key, { tenant }, false);
         }
-        if (event.type === "invalidate:tag" && event.tag) {
-          await this.invalidateTagInternal(event.tag, { tenant: event.tenant }, false);
+        if (event.type === "invalidate:tag" && typeof event.tag === "string") {
+          await this.invalidateTagInternal(event.tag, { tenant }, false);
         }
       })
       .then((unsubscribe) => this.unsubscribers.push(unsubscribe))
@@ -532,16 +656,40 @@ class SafeCache implements Cache {
       return;
     }
     try {
-      await bus.publish({
+      const payload: CacheEvent = {
         id: `${this.source}:${this.clock.now()}:${this.eventCounter++}`,
         source: this.source,
         timestamp: this.clock.now(),
         namespace: this.options.namespace,
         ...event,
-      });
+      };
+      const secret = this.options.distributed?.signingSecret;
+      if (secret) {
+        payload.signature = signEvent(payload, secret);
+      }
+      await bus.publish(payload);
     } catch (error) {
       this.recordError("publish", error);
     }
+  }
+
+  private verifyIncomingEvent(event: CacheEvent): boolean {
+    const secret = this.options.distributed?.signingSecret;
+    if (!secret) {
+      return true;
+    }
+    const expected = signEvent(event, secret);
+    const provided = event.signature;
+    if (typeof provided !== "string" || provided.length !== expected.length) {
+      this.recordError("event:signature", new Error("missing or malformed event signature"));
+      return false;
+    }
+    const matches = timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+    if (!matches) {
+      this.recordError("event:signature", new Error("invalid event signature"));
+      return false;
+    }
+    return true;
   }
 }
 
@@ -576,4 +724,33 @@ function compareVersions(next: CacheVersion, current: CacheVersion | undefined):
     return next - current;
   }
   return String(next).localeCompare(String(current));
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function signEvent(event: CacheEvent, secret: string): string {
+  return createHmac("sha256", secret).update(canonicalizeEvent(event)).digest("hex");
+}
+
+/**
+ * Deterministic serialization of an event for signing/verification. The signature
+ * field is excluded and keys are emitted in a stable order so both sides agree on
+ * the exact bytes regardless of property insertion order across the bus.
+ */
+function canonicalizeEvent(event: CacheEvent): string {
+  const record = event as unknown as Record<string, unknown>;
+  const entries: Array<[string, unknown]> = [];
+  for (const key of Object.keys(record).sort()) {
+    if (key === "signature") {
+      continue;
+    }
+    const value = record[key];
+    if (value === undefined) {
+      continue;
+    }
+    entries.push([key, value]);
+  }
+  return JSON.stringify(entries);
 }

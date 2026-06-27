@@ -33,6 +33,44 @@ describe("Prisma cache sync", () => {
     expect(cache.invalidateByTag).not.toHaveBeenCalledWith("User:456");
   });
 
+  test("invalidates remaining tags when the first tag throws and routes the error", async () => {
+    const cache = {
+      invalidateByTag: vi.fn(async (tag: string) => {
+        if (tag === "User") {
+          throw new Error("model tag failure");
+        }
+      }),
+    };
+    const onInvalidationError = vi.fn();
+    const sync = createPrismaCacheSync(cache, { onInvalidationError });
+
+    await expect(sync.invalidate("User", "123")).resolves.toBeUndefined();
+
+    // The entity tag is still invalidated even though the model tag threw first.
+    expect(cache.invalidateByTag).toHaveBeenCalledWith("User");
+    expect(cache.invalidateByTag).toHaveBeenCalledWith("User:123");
+    expect(onInvalidationError).toHaveBeenCalledTimes(1);
+    expect(onInvalidationError).toHaveBeenCalledWith(expect.any(Error), "User");
+    expect(onInvalidationError.mock.calls[0]?.[0]).toMatchObject({ message: "model tag failure" });
+  });
+
+  test("propagates an aggregated error after invalidating every tag", async () => {
+    const cache = {
+      invalidateByTag: vi.fn(async (tag: string) => {
+        if (tag === "User") {
+          throw new Error("model tag failure");
+        }
+      }),
+    };
+    const sync = createPrismaCacheSync(cache, { propagateInvalidationErrors: true });
+
+    await expect(sync.invalidate("User", "123")).rejects.toThrow("model tag failure");
+
+    // Best-effort: the entity tag is still attempted before the error propagates.
+    expect(cache.invalidateByTag).toHaveBeenCalledWith("User");
+    expect(cache.invalidateByTag).toHaveBeenCalledWith("User:123");
+  });
+
   test("handles Prisma mutation extension calls without caching reads", async () => {
     const cache = {
       invalidateByTag: vi.fn(async () => {}),

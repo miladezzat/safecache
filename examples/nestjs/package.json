@@ -9,8 +9,12 @@
   },
   "dependencies": {
     "@safecache/core": "workspace:*",
+    "@safecache/locks": "workspace:*",
     "@safecache/memory": "workspace:*",
-    "@safecache/nestjs": "workspace:*"
+    "@safecache/nestjs": "workspace:*",
+    "@safecache/pubsub": "workspace:*",
+    "@safecache/redis": "workspace:*",
+    "redis": "^6.0.1"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

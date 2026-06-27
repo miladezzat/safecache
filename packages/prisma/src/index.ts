@@ -26,6 +26,7 @@ export interface PrismaTagOptions {
 
 export interface PrismaCacheSyncOptions extends PrismaTagOptions {
   propagateInvalidationErrors?: boolean;
+  onInvalidationError?: (error: Error, tag: string) => void;
 }
 
 export interface PrismaMutateOptions<T> {
@@ -164,15 +165,26 @@ async function invalidateTags(
   tags: string[],
   options: PrismaCacheSyncOptions,
 ): Promise<void> {
-  try {
-    for (const tag of unique(tags)) {
+  const failures: Error[] = [];
+  for (const tag of unique(tags)) {
+    try {
       await cache.invalidateByTag(tag);
-    }
-  } catch (error) {
-    if (options.propagateInvalidationErrors) {
-      throw error;
+    } catch (error) {
+      const normalized = toError(error);
+      failures.push(normalized);
+      options.onInvalidationError?.(normalized, tag);
     }
   }
+  const [firstFailure] = failures;
+  if (firstFailure && options.propagateInvalidationErrors) {
+    throw failures.length === 1
+      ? firstFailure
+      : new AggregateError(failures, "Failed to invalidate one or more Prisma cache tags");
+  }
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 function inferIdFromArgs(args: unknown): PrismaEntityId | undefined {
