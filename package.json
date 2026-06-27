@@ -4,6 +4,10 @@
   "private": true,
   "description": "SafeCache is a production-safe cache reliability framework for Node.js.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/miladezzat/safecache.git"
+  },
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "engines": {

@@ -4,6 +4,11 @@
   "description": "NATS CacheEventBus adapter for SafeCache.",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/miladezzat/safecache.git",
+    "directory": "packages/nats"
+  },
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
