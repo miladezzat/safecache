@@ -9,6 +9,7 @@ import type {
   Cache,
   CacheEntry,
   CacheLayer,
+  CacheLockHandle,
   CacheOptions,
   CachePlugin,
   CacheProvider,
@@ -31,6 +32,9 @@ type ReadResult<T> =
 const systemClock: Clock = {
   now: () => Date.now(),
 };
+
+const DEFAULT_LOCK_TTL_MS = 30_000;
+const LOCK_POLL_INTERVAL_MS = 10;
 
 export function createCache(options: CacheOptions): Cache {
   return new SafeCache(options);
@@ -96,7 +100,7 @@ class SafeCache implements Cache {
     this.counters.misses += 1;
     this.emit({ type: "miss", key: query.key, tenant: query.tenant });
 
-    const load = () => this.fetchAndStore(query, scopedKey, ttlMs);
+    const load = () => this.fetchAndStoreWithDistributedLock(query, scopedKey, ttlMs);
     if (this.options.safety?.preventStampede ?? true) {
       return this.singleFlight.run(scopedKey, load);
     }
@@ -231,6 +235,9 @@ class SafeCache implements Cache {
         }
       } catch (error) {
         this.recordError("deserialize", error, query.key, query.tenant);
+        if (!this.failOpen) {
+          throw error;
+        }
       }
     }
 
@@ -261,6 +268,47 @@ class SafeCache implements Cache {
     return value;
   }
 
+  private async fetchAndStoreWithDistributedLock<T>(
+    query: QueryOptions<T>,
+    scopedKey: string,
+    ttlMs: number,
+  ): Promise<T> {
+    const lock = this.options.distributed?.lock;
+    const shouldUseLock = query.lock ?? Boolean(lock);
+    if (!shouldUseLock || !lock) {
+      return this.fetchAndStore(query, scopedKey, ttlMs);
+    }
+
+    let handle: CacheLockHandle | null;
+    try {
+      handle = await this.withTimeout(
+        () => lock.acquire(scopedKey, this.resolveLockTtl(query)),
+        query.timeout,
+      );
+    } catch (error) {
+      this.recordError("lock", error, query.key, query.tenant);
+      if (!this.failOpen) {
+        throw error;
+      }
+      return this.fetchAndStore(query, scopedKey, ttlMs);
+    }
+
+    if (handle) {
+      try {
+        return await this.fetchAndStore(query, scopedKey, ttlMs);
+      } finally {
+        await this.releaseLock(handle, query);
+      }
+    }
+
+    const peerRead = await this.waitForPeerRefresh<T>(query, scopedKey);
+    if (peerRead.state === "hit" || (peerRead.state === "stale" && this.canServeStale(query))) {
+      return peerRead.entry.value;
+    }
+
+    return this.fetchAndStore(query, scopedKey, ttlMs);
+  }
+
   private async writeEntry<T>(
     scopedKey: string,
     entry: CacheEntry<T>,
@@ -272,6 +320,9 @@ class SafeCache implements Cache {
       raw = this.serializer.serialize(entry);
     } catch (error) {
       this.recordError("serialize", error, scopedKey, tenant);
+      if (!this.failOpen) {
+        throw error;
+      }
       return;
     }
 
@@ -392,6 +443,9 @@ class SafeCache implements Cache {
     } catch (error) {
       this.circuitBreaker.recordFailure();
       this.recordError("get", error, query.key, query.tenant);
+      if (!this.failOpen) {
+        throw error;
+      }
       return null;
     }
   }
@@ -410,6 +464,9 @@ class SafeCache implements Cache {
     } catch (error) {
       this.circuitBreaker.recordFailure();
       this.recordError("set", error, scopedKey);
+      if (!this.failOpen) {
+        throw error;
+      }
     }
   }
 
@@ -482,6 +539,40 @@ class SafeCache implements Cache {
 
   private emit(event: CacheRuntimeEvent): void {
     this.events.emit(event);
+  }
+
+  private async waitForPeerRefresh<T>(
+    query: QueryOptions<T>,
+    scopedKey: string,
+  ): Promise<ReadResult<T>> {
+    const deadline = Date.now() + this.resolveLockTtl(query);
+    while (Date.now() < deadline) {
+      await delay(LOCK_POLL_INTERVAL_MS);
+      const read = await this.readLayers<T>(query, scopedKey);
+      if (read.state === "hit" || (read.state === "stale" && this.canServeStale(query))) {
+        return read;
+      }
+    }
+    return { state: "miss" };
+  }
+
+  private async releaseLock<T>(handle: CacheLockHandle, query: QueryOptions<T>): Promise<void> {
+    try {
+      await handle.release();
+    } catch (error) {
+      this.recordError("lock:release", error, query.key, query.tenant);
+      if (!this.failOpen) {
+        throw error;
+      }
+    }
+  }
+
+  private resolveLockTtl<T>(query: QueryOptions<T>): number {
+    return query.timeout ? parseDuration(query.timeout, "timeout") : DEFAULT_LOCK_TTL_MS;
+  }
+
+  private get failOpen(): boolean {
+    return this.options.safety?.failOpen ?? true;
   }
 
   private subscribeToDistributedEvents(): void {
@@ -576,4 +667,8 @@ function compareVersions(next: CacheVersion, current: CacheVersion | undefined):
     return next - current;
   }
   return String(next).localeCompare(String(current));
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

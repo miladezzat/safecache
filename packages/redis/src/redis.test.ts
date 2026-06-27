@@ -91,4 +91,15 @@ describe("redisProvider", () => {
     await provider.tagIndex.removeTag("scope", "users");
     expect(await provider.tagIndex.getKeysByTag("scope", "users")).toEqual([]);
   });
+
+  test("redis tag index can remove a key without caller-supplied tag list", async () => {
+    const redis = new FakeRedis();
+    const provider = redisProvider(redis);
+
+    await provider.tagIndex.addTags("scope", "key-a", ["users", "user:key-a"], 1000);
+    await provider.tagIndex.removeKey("scope", "key-a");
+
+    expect(await provider.tagIndex.getKeysByTag("scope", "users")).toEqual([]);
+    expect(await provider.tagIndex.getKeysByTag("scope", "user:key-a")).toEqual([]);
+  });
 });

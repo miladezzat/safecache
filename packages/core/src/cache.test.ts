@@ -4,6 +4,8 @@ import {
   jsonSerializer,
   type CacheEvent,
   type CacheEventBus,
+  type CacheLock,
+  type CacheLockHandle,
   type CachePlugin,
   type CacheProvider,
   type CacheTagIndex,
@@ -106,6 +108,22 @@ class InlineEventBus implements CacheEventBus {
     this.handlers.add(handler);
     return async () => {
       this.handlers.delete(handler);
+    };
+  }
+}
+
+class SharedMemoryLock implements CacheLock {
+  private readonly locked = new Set<string>();
+
+  async acquire(key: string): Promise<CacheLockHandle | null> {
+    if (this.locked.has(key)) {
+      return null;
+    }
+    this.locked.add(key);
+    return {
+      release: async () => {
+        this.locked.delete(key);
+      },
     };
   }
 }
@@ -223,6 +241,19 @@ describe("createCache", () => {
     expect(errors).toContain("readonly");
   });
 
+  test("provider get errors can fail closed", async () => {
+    const provider = new RawMapProvider();
+    provider.getError = new Error("down");
+    const cache = createCache({
+      namespace: "app",
+      provider,
+      defaultTtl: "1m",
+      safety: { failOpen: false },
+    });
+
+    await expect(cache.query({ key: "k", fetcher: async () => "fresh" })).rejects.toThrow("down");
+  });
+
   test("fetcher and action errors propagate", async () => {
     const cache = createCache({
       namespace: "app",
@@ -279,6 +310,35 @@ describe("createCache", () => {
       cache.query({ key: "hot", fetcher }),
     ]);
 
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  test("distributed lock prevents cross-instance stampede", async () => {
+    const provider = new RawMapProvider();
+    const lock = new SharedMemoryLock();
+    const first = createCache({
+      namespace: "app",
+      provider,
+      defaultTtl: "1m",
+      distributed: { lock },
+    });
+    const second = createCache({
+      namespace: "app",
+      provider,
+      defaultTtl: "1m",
+      distributed: { lock },
+    });
+    const fetcher = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return "fresh";
+    });
+
+    const results = await Promise.all([
+      first.query({ key: "hot", fetcher }),
+      second.query({ key: "hot", fetcher }),
+    ]);
+
+    expect(results).toEqual(["fresh", "fresh"]);
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
@@ -377,6 +437,29 @@ describe("createCache", () => {
     await cache.shutdown();
 
     expect(calls).toEqual(["setup", "shutdown"]);
+  });
+
+  test("async plugin setup errors are emitted", async () => {
+    const cache = createCache({
+      namespace: "app",
+      provider: new RawMapProvider(),
+    });
+    const errors: string[] = [];
+    cache.on("error", (event) => {
+      if (event.type === "error") {
+        errors.push(event.error.message);
+      }
+    });
+
+    cache.use({
+      name: "bad-plugin",
+      setup: async () => {
+        throw new Error("setup failed");
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(errors).toContain("setup failed");
   });
 
   test("distributed events invalidate other cache instances and ignore self events", async () => {

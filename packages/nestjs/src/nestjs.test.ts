@@ -36,4 +36,34 @@ describe("SafeCacheModule", () => {
 
     await expect(service.query({ key: "k", fetcher: async () => "v" })).resolves.toBe("v");
   });
+
+  test("forRootAsync shares one cache instance between token and service providers", async () => {
+    const cache = createCache({
+      namespace: "nestjs",
+      provider: {
+        name: "noop",
+        get: async () => null,
+        set: async () => {},
+        delete: async () => {},
+      },
+      defaultTtl: "1m",
+    });
+    let calls = 0;
+    const module = SafeCacheModule.forRootAsync({
+      useFactory: async () => {
+        calls += 1;
+        return cache;
+      },
+    });
+
+    const tokenProvider = module.providers[0];
+    const serviceProvider = module.providers[1];
+    const resolvedCache = await tokenProvider?.useFactory?.();
+    const service = await serviceProvider?.useFactory?.();
+
+    expect(calls).toBe(1);
+    expect(resolvedCache).toBe(cache);
+    expect(service).toBeInstanceOf(SafeCacheService);
+    expect((service as SafeCacheService).raw).toBe(cache);
+  });
 });

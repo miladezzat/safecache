@@ -45,13 +45,19 @@ export class SafeCacheModule {
   }
 
   static forRootAsync(options: SafeCacheAsyncOptions): SafeCacheDynamicModule {
+    let cachePromise: Promise<Cache> | undefined;
+    const getCache = () => {
+      cachePromise ??= Promise.resolve(options.useFactory());
+      return cachePromise;
+    };
+
     return {
       module: SafeCacheModule,
       providers: [
-        { provide: SAFE_CACHE, useFactory: options.useFactory },
+        { provide: SAFE_CACHE, useFactory: getCache },
         {
           provide: SafeCacheService,
-          useFactory: async () => new SafeCacheService(await options.useFactory()),
+          useFactory: async () => new SafeCacheService(await getCache()),
         },
       ],
       exports: [SAFE_CACHE, SafeCacheService],

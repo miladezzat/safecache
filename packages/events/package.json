@@ -1,6 +1,6 @@
 {
   "name": "@safecache/events",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Event helpers for SafeCache distributed invalidation.",
   "type": "module",
   "license": "MIT",
@@ -36,5 +36,8 @@
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
     "vitest": "^2.1.9"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }
