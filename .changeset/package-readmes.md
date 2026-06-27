@@ -26,4 +26,4 @@
 "@safecache/valkey": patch
 ---
 
-Add full README documentation for each published package.
+Improve package README documentation and examples links.

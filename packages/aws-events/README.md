@@ -34,6 +34,10 @@ const events = awsEventBus({
 
 Use this package when invalidation events need to cross services through AWS EventBridge or a custom AWS subscriber bridge.
 
+## Production Notes
+
+Use a subscriber bridge that turns AWS events back into SafeCache `CacheEvent` objects. Treat cross-region propagation as eventually consistent.
+
 ## Related Packages
 
 - `@safecache/core`

@@ -33,6 +33,10 @@ const response = await dashboard.handle({ method: "GET", path: "/api/snapshot" }
 
 Use this package when you want an embeddable read-only dashboard endpoint for SafeCache operational state.
 
+## Production Notes
+
+Keep the dashboard internal. It can expose key names, tags, errors, and operational metadata.
+
 ## Related Packages
 
 - `@safecache/core`

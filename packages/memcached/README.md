@@ -32,6 +32,10 @@ const cache = createCache({
 
 Use this package when Memcached is the backing provider and tag metadata can remain local to the process.
 
+## Production Notes
+
+This package stores values in Memcached but keeps tag metadata local. Use it where local tag invalidation is acceptable, or add a stronger shared tag strategy.
+
 ## Related Packages
 
 - `@safecache/core`

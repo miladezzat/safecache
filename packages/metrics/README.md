@@ -32,6 +32,10 @@ detach();
 
 Use this package to turn SafeCache runtime events and stats into operational metrics.
 
+## Production Notes
+
+Export metrics through your existing monitoring stack and alert on error growth, stale served spikes, and lock contention.
+
 ## Related Packages
 
 - `@safecache/core`

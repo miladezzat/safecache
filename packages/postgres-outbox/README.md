@@ -34,6 +34,10 @@ cache.use(
 
 Use this package when database transactions write cache invalidation records that should be retried until processed.
 
+## Production Notes
+
+Write outbox rows in the same transaction as the data change. Monitor retry counts and `last_error` for stuck invalidations.
+
 ## Related Packages
 
 - `@safecache/core`

@@ -33,6 +33,10 @@ const cache = createCache({
 
 Use this package when Redis should store cached entries and distributed tag metadata.
 
+## Production Notes
+
+Use a Redis client with the required provider and set-operation methods. For multi-instance apps with memory layers, combine this package with `@safecache/pubsub`.
+
 ## Related Packages
 
 - `@safecache/core`

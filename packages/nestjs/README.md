@@ -36,6 +36,10 @@ export class UsersService {
 
 Use this package when NestJS modules should receive SafeCache through explicit dependency injection.
 
+## Production Notes
+
+Use `forRootAsync()` when cache construction depends on async Redis clients or configuration services.
+
 ## Related Packages
 
 - `@safecache/core`

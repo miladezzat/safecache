@@ -34,6 +34,10 @@ await sync.mutate({
 
 Use this package to invalidate model and entity tags after Prisma create, update, upsert, and delete operations.
 
+## Production Notes
+
+This package invalidates mutations; it does not cache Prisma reads automatically. Cached reads still need explicit SafeCache `query()` calls.
+
 ## Related Packages
 
 - `@safecache/core`

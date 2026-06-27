@@ -37,6 +37,10 @@ cache.use(
 
 Use this package when MongoDB writes outside the current process should invalidate SafeCache keys or tags.
 
+## Production Notes
+
+MongoDB change streams require a replica set or sharded cluster. Persist resume tokens for production use.
+
 ## Related Packages
 
 - `@safecache/core`

@@ -41,6 +41,10 @@ if (!deduper.seen(event.id)) {
 
 Use this package when you need to construct, dedupe, or audit SafeCache events outside the core runtime.
 
+## Production Notes
+
+Event metadata is operational data. Include actor, reason, tenant, and region when manual invalidation or audit trails matter.
+
 ## Related Packages
 
 - `@safecache/core`

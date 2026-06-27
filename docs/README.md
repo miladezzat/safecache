@@ -13,6 +13,14 @@ SafeCache is early-stage. Packages are published as `0.1.0`; APIs are usable but
 - [Cache-aside strategy](cache-aside-strategy.md)
 - [Caching comparisons](comparisons.md)
 
+## Runnable Tutorials
+
+- [Basic Node](../examples/basic-node/README.md)
+- [Redis distributed](../examples/redis-distributed/README.md)
+- [NestJS](../examples/nestjs/README.md)
+- [MongoDB magic sync](../examples/magic-mongodb/README.md)
+- [Postgres outbox](../examples/postgres-outbox/README.md)
+
 ## Core Caching
 
 - [Tags and invalidation](tags-and-invalidation.md)

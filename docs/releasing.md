@@ -9,7 +9,8 @@ SafeCache uses Changesets and GitHub Actions for npm releases.
 3. Add the token to the GitHub repository as `NPM_TOKEN`.
 4. Make sure every package intended for npm has a public package name and is not marked private.
 
-The release workflow reads Node from `.nvmrc`, installs with pnpm, runs the full verification gate, and then runs Changesets.
+The release workflow reads Node from `.nvmrc`, installs with pnpm, runs the full verification gate,
+and then runs Changesets.
 
 ## Release flow
 
@@ -28,11 +29,20 @@ The release workflow reads Node from `.nvmrc`, installs with pnpm, runs the full
    pnpm release
    ```
 
+## Docs-only releases
+
+Package READMEs are shown on npm package pages at publish time. When package READMEs change, add a
+patch changeset for the affected packages so npm receives the updated documentation.
+
+For a repo-wide package README pass, patch all published `@safecache/*` packages.
+
 ## Trusted Publishing
 
-The workflow already grants `id-token: write` and sets `NPM_CONFIG_PROVENANCE=true`, which supports npm provenance when the publisher supports it.
+The workflow grants `id-token: write` and sets `NPM_CONFIG_PROVENANCE=true`, which supports npm
+provenance when the publisher supports it.
 
-For tokenless Trusted Publishing, configure each npm package under npm package settings to trust this GitHub repository and workflow:
+For tokenless Trusted Publishing, configure each npm package under npm package settings to trust
+this GitHub repository and workflow:
 
 ```txt
 Repository: miladezzat/safecache
@@ -40,4 +50,12 @@ Workflow: .github/workflows/release.yml
 Environment: none
 ```
 
-After that is configured and verified for every published package, remove `NPM_TOKEN` and `NODE_AUTH_TOKEN` from the workflow environment.
+After that is configured and verified for every published package, remove `NPM_TOKEN` and
+`NODE_AUTH_TOKEN` from the workflow environment.
+
+## Common mistakes
+
+- Forgetting `NPM_TOKEN` for token-based publishing.
+- Merging docs changes without a changeset when npm README pages should update.
+- Publishing from a branch other than `main`.
+- Assuming a successful CI run means packages were published; check the release job output.

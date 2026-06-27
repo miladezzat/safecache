@@ -32,6 +32,10 @@ clock.advance(60_001);
 
 Use this package to test cache behavior without a real Redis, MongoDB, or Postgres dependency.
 
+## Production Notes
+
+Testing helpers are intended for deterministic tests, not production providers. Use `FakeClock` to test TTL behavior without sleeping.
+
 ## Related Packages
 
 - `@safecache/core`

@@ -47,6 +47,10 @@ const user = await cache.query({
 
 Use this package in every SafeCache setup. It owns query, wrap, mutate, invalidation, stats, plugins, and provider contracts.
 
+## Production Notes
+
+Keep cache construction at application composition boundaries. Use explicit tags on every cached read and prefer `mutate()` for write paths so invalidation happens after successful source-of-truth changes.
+
 ## Related Packages
 
 - `@safecache/memory`

@@ -41,6 +41,10 @@ const service = withSafeCache(new UsersService(), cache);
 
 Use this package when a class-based service wants decorators without a hidden global cache singleton.
 
+## Production Notes
+
+Decorators are optional. Use them when method boundaries are clean, and keep cache injection explicit with `withSafeCache()`.
+
 ## Related Packages
 
 - `@safecache/core`

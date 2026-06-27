@@ -4,6 +4,7 @@ import { memoryProvider } from "@safecache/memory";
 type User = { id: string; name: string };
 
 const users = new Map<string, User>([["1", { id: "1", name: "Ada" }]]);
+let fetchCount = 0;
 
 export const cache = createCache({
   namespace: "basic-node",
@@ -19,7 +20,10 @@ export async function getUser(id: string) {
   return cache.query({
     key: `user:${id}`,
     tags: [`user:${id}`, "users"],
-    fetcher: async () => users.get(id) ?? null,
+    fetcher: async () => {
+      fetchCount += 1;
+      return users.get(id) ?? null;
+    },
   });
 }
 
@@ -36,4 +40,22 @@ export async function updateUser(id: string, data: Partial<User>) {
       return next;
     },
   });
+}
+
+export async function runBasicNodeExample() {
+  fetchCount = 0;
+
+  const firstRead = await getUser("1");
+  const secondRead = await getUser("1");
+  const updated = await updateUser("1", { name: "Ada Lovelace" });
+  const afterMutation = await getUser("1");
+
+  return {
+    firstRead,
+    secondRead,
+    updated,
+    afterMutation,
+    fetchCount,
+    stats: cache.stats(),
+  };
 }

@@ -30,6 +30,10 @@ registerMongooseHooks(UserSchema, sync, { modelName: "User" });
 
 Use this package to invalidate model and document tags after Mongoose mutation hooks.
 
+## Production Notes
+
+Register hooks before compiling models. Cached reads must use the same model and document tags as the hook invalidation strategy.
+
 ## Related Packages
 
 - `@safecache/core`

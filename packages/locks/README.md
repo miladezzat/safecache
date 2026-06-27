@@ -35,6 +35,10 @@ const cache = createCache({
 
 Use this package with Redis when multiple app instances need one owner for a cache refresh.
 
+## Production Notes
+
+Choose a lock TTL longer than the expected fetcher runtime. Prefer clients that support `eval` so lock release is token-safe.
+
 ## Related Packages
 
 - `@safecache/core`

@@ -13,8 +13,21 @@ It is not a Redis wrapper and it is not just a local TTL map. SafeCache sits abo
 and gives applications a consistent cache-aside API, mutation-aware invalidation, tag organization,
 stampede protection, fail-open behavior, distributed coordination, test utilities, and observability.
 
-SafeCache is early-stage. Packages are published as `0.1.0`; APIs are usable but may change before
-`1.0`.
+SafeCache is in active `0.x` development. The current packages are suitable for evaluation and
+early integration, and APIs may evolve before `1.0`.
+
+## Why SafeCache Exists
+
+Most Node.js cache tools make storage easy: put a value in memory, Redis, or another backend with a
+TTL. Production caching usually fails somewhere else:
+
+- a write path forgets to invalidate related reads
+- many requests stampede the database after one hot key expires
+- Redis has a transient outage and the app fails closed
+- one instance invalidates local memory while another serves stale data
+- nobody can tell which key, tag, or plugin caused a bad cache state
+
+SafeCache makes those behaviors explicit and repeatable.
 
 ## Install
 
@@ -94,6 +107,28 @@ const cache = createCache({
 - Observability through events, stats, metrics, CLI, and dashboard packages.
 - Optional database-change sync through MongoDB streams and Postgres outbox integrations.
 
+## When To Use SafeCache
+
+Use SafeCache when your app needs:
+
+- cache-aside reads with a consistent TypeScript API
+- mutation-aware invalidation after successful writes
+- tag-based invalidation for entity and collection dependencies
+- local or distributed stampede protection
+- fail-open behavior during cache provider outages
+- multi-layer memory plus Redis caching
+- observability through events, stats, metrics, CLI, or dashboard tooling
+
+## When Not To Use SafeCache
+
+Use a smaller tool instead when:
+
+- you only need a single-process TTL map
+- you only need direct Redis commands
+- you do not need tags or mutation-aware invalidation
+- you want a framework-specific route cache and do not need application-level cache safety
+- you cannot accept `0.x` API evolution yet
+
 ## Packages
 
 | Package                      | Purpose                                                           | Maturity      |
@@ -165,6 +200,14 @@ Keyv, `node-cache`, `lru-cache`, Redis clients, decorator libraries, and framewo
 - [CLI](docs/cli.md)
 - [Dashboard](docs/dashboard.md)
 - [Caching comparisons](docs/comparisons.md)
+
+## Examples
+
+- [Basic Node](examples/basic-node/README.md)
+- [Redis distributed](examples/redis-distributed/README.md)
+- [NestJS](examples/nestjs/README.md)
+- [MongoDB magic sync](examples/magic-mongodb/README.md)
+- [Postgres outbox](examples/postgres-outbox/README.md)
 
 ## Development
 

@@ -34,6 +34,10 @@ const cache = createCache({
 
 Use this package when multiple Node.js processes need to receive each other's cache invalidation events through Redis.
 
+## Production Notes
+
+Redis Pub/Sub is not durable. Use it for online instance invalidation; use Kafka, RabbitMQ, AWS events, or an outbox when replay or durability is required.
+
 ## Related Packages
 
 - `@safecache/core`

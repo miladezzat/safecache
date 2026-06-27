@@ -32,6 +32,10 @@ const cache = createCache({
 
 Use this package when your Redis-compatible backing store is Valkey and you want Valkey-specific package naming.
 
+## Production Notes
+
+Valkey compatibility follows the Redis provider contract. Validate the client method names before using it in production.
+
 ## Related Packages
 
 - `@safecache/core`

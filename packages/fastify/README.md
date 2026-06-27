@@ -35,6 +35,10 @@ fastify.get("/users/:id", async (request) => {
 
 Use this package when Fastify routes should access SafeCache from the request object.
 
+## Production Notes
+
+Register the plugin once during app setup. Avoid creating a cache per request.
+
 ## Related Packages
 
 - `@safecache/core`

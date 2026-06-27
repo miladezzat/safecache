@@ -36,6 +36,10 @@ app.get("/users/:id", async (req, res) => {
 
 Use this package when Express handlers should access a request-scoped cache reference without importing a global singleton.
 
+## Production Notes
+
+Attach one application-level cache instance. Protect any route that exposes operational cache controls.
+
 ## Related Packages
 
 - `@safecache/core`

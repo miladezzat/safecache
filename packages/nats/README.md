@@ -32,6 +32,10 @@ const cache = createCache({ namespace: "app", provider, distributed: { events } 
 
 Use this package when cache invalidation events should flow through NATS subjects.
 
+## Production Notes
+
+Use NATS when low-latency service messaging fits your invalidation topology. Confirm delivery guarantees for your deployment mode.
+
 ## Related Packages
 
 - `@safecache/core`

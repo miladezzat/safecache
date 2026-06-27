@@ -33,6 +33,10 @@ const cache = createCache({
 
 Use this package for local development, tests, single-process apps, or the fast first layer in a multi-layer cache.
 
+## Production Notes
+
+The memory provider is process-local. Use it alone for single-process apps and tests, or as the first layer in front of Redis for multi-instance deployments.
+
 ## Related Packages
 
 - `@safecache/core`

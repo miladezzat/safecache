@@ -31,6 +31,10 @@ process.stderr.write(result.stderr);
 
 Use this package to build operational commands such as doctor, stats, inspect, invalidate, warm, and benchmark.
 
+## Production Notes
+
+Treat invalidation commands as privileged operations. Require authentication and tenant awareness before exposing them in production tools.
+
 ## Related Packages
 
 - `@safecache/core`

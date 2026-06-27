@@ -33,6 +33,10 @@ const cache = createCache({ namespace: "app", provider, distributed: { events } 
 
 Use this package when cache invalidation events should flow through Kafka topics.
 
+## Production Notes
+
+Kafka can provide durable event transport, but handlers should still be idempotent and dedupe by event ID.
+
 ## Related Packages
 
 - `@safecache/core`

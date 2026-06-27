@@ -32,6 +32,10 @@ const cache = createCache({ namespace: "app", provider, distributed: { events } 
 
 Use this package when cache invalidation events should flow through RabbitMQ fanout exchanges.
 
+## Production Notes
+
+Use durable exchanges and queues when invalidation delivery must survive restarts.
+
 ## Related Packages
 
 - `@safecache/core`

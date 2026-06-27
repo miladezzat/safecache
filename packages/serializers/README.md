@@ -34,6 +34,10 @@ const cache = createCache({
 
 Use this package when the default JSON serializer is not enough for your cached values or provider payload format.
 
+## Production Notes
+
+Changing serializers can make old provider payloads unreadable. Roll serializer changes with a namespace change or cache flush plan.
+
 ## Related Packages
 
 - `@safecache/core`
