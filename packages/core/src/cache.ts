@@ -37,6 +37,9 @@ const systemClock: Clock = {
 
 const DEFAULT_LOCK_TTL_MS = 30_000;
 const LOCK_POLL_INTERVAL_MS = 10;
+// Bound the invalidation-epoch map so a long-lived process tracking many distinct
+// keys cannot grow it without limit; the oldest entries are evicted past this size.
+const MAX_INVALIDATION_EPOCHS = 5_000;
 
 export function createCache(options: CacheOptions): Cache {
   return new SafeCache(options);
@@ -54,6 +57,12 @@ class SafeCache implements Cache {
   private readonly seenEventIds = new Set<string>();
   private readonly unsubscribers: Array<() => Promise<void>> = [];
   private eventCounter = 0;
+  // Monotonic counter stamped onto each invalidation. fetchAndStore/backfill capture
+  // the current epoch for a key before they read/fetch and re-check it before (and
+  // after) writing, so a write that races a concurrent invalidation is fenced out
+  // instead of resurrecting data the invalidation just removed (the headline bug).
+  private epochCounter = 0;
+  private readonly invalidationEpochs = new Map<string, number>();
   private readonly counters: CacheStats = {
     hits: 0,
     misses: 0,
@@ -72,6 +81,11 @@ class SafeCache implements Cache {
     this.circuitBreaker = new CircuitBreaker(options.safety, this.clock);
     this.source = options.source ?? `safecache-${Math.random().toString(36).slice(2)}`;
     this.layers = normalizeLayers(options);
+    // Register the user's error notifier first so it observes every cache-side
+    // failure, including any raised during plugin setup / subscription below.
+    if (options.onError) {
+      this.events.on("error", options.onError as CacheRuntimeEventHandler);
+    }
     this.pluginRegistry = new PluginRegistry(this, (event) => this.emit(event));
     this.subscribeToDistributedEvents();
     for (const plugin of options.plugins ?? []) {
@@ -82,12 +96,15 @@ class SafeCache implements Cache {
   async query<T>(query: QueryOptions<T>): Promise<T> {
     const ttlMs = this.resolveTtl(query);
     const scopedKey = scopeKey(this.options.namespace, query.key, query.tenant);
+    // Capture the epoch BEFORE the read so a backfill cannot resurrect a key that
+    // is invalidated between the read and the backfill write.
+    const epoch = this.currentEpoch(scopedKey);
     const read = await this.readLayers<T>(query, scopedKey);
 
     if (read.state === "hit") {
       this.counters.hits += 1;
       this.emit({ type: "hit", key: query.key, tenant: query.tenant });
-      await this.backfill(read, scopedKey);
+      await this.backfill(read, scopedKey, epoch, query.key, query.tenant);
       this.refreshAheadIfNeeded(query, scopedKey, read.entry, ttlMs);
       return read.entry.value;
     }
@@ -155,13 +172,42 @@ class SafeCache implements Cache {
     return { ...this.counters, circuitBreakerOpen: this.circuitBreaker.isOpen };
   }
 
+  /** Latest invalidation epoch observed for `scopedKey` (0 if never invalidated). */
+  private currentEpoch(scopedKey: string): number {
+    return this.invalidationEpochs.get(scopedKey) ?? 0;
+  }
+
+  /**
+   * Stamp a fresh epoch onto `scopedKey`, fencing out any in-flight write that
+   * captured an earlier epoch. The map is bounded: once it exceeds
+   * MAX_INVALIDATION_EPOCHS the oldest insertions are evicted (Map preserves
+   * insertion order, so the iterator yields oldest-first).
+   */
+  private bumpEpoch(scopedKey: string): void {
+    this.invalidationEpochs.set(scopedKey, ++this.epochCounter);
+    if (this.invalidationEpochs.size > MAX_INVALIDATION_EPOCHS) {
+      const overflow = this.invalidationEpochs.size - MAX_INVALIDATION_EPOCHS;
+      let removed = 0;
+      for (const oldest of this.invalidationEpochs.keys()) {
+        this.invalidationEpochs.delete(oldest);
+        removed += 1;
+        if (removed >= overflow) {
+          break;
+        }
+      }
+    }
+  }
+
   private async invalidateKeyInternal(
     key: string,
     options: { tenant?: string } = {},
     publish: boolean,
   ): Promise<void> {
     const scopedKey = scopeKey(this.options.namespace, key, options.tenant);
-    await this.deleteScopedKey(scopedKey);
+    // Fence first: any write that already captured an older epoch for this key will
+    // now abort (or compensate) instead of resurrecting the value we are deleting.
+    this.bumpEpoch(scopedKey);
+    await this.deleteScopedKey(scopedKey, key, options.tenant);
     for (const layer of this.layers) {
       await this.safeTagIndexOperation("removeKey", () =>
         layer.tagIndex?.removeKey(scopePrefix(this.options.namespace, options.tenant), scopedKey),
@@ -184,6 +230,11 @@ class SafeCache implements Cache {
     publish: boolean,
   ): Promise<void> {
     const scope = scopePrefix(this.options.namespace, options.tenant);
+    // Best-effort, bounded TOCTOU: the key set is snapshotted from the tag index
+    // here; a write that adds a brand-new key under `tag` AFTER this read but before
+    // we delete will not be caught by this pass. That residual race is acceptable —
+    // such a write either captured a pre-bump epoch (and is fenced by FIX-1) or is a
+    // genuinely newer value the invalidation never intended to remove.
     const keys = new Set<string>();
     for (const layer of this.layers) {
       const indexedKeys = await this.safeTagIndexRead(() =>
@@ -195,7 +246,10 @@ class SafeCache implements Cache {
     }
 
     for (const key of keys) {
-      await this.deleteScopedKey(key);
+      // Fence every scoped key the tag resolved to so an in-flight write racing this
+      // tag invalidation cannot re-store any of the affected entries.
+      this.bumpEpoch(key);
+      await this.deleteScopedKey(key, undefined, options.tenant);
     }
     for (const layer of this.layers) {
       await this.safeTagIndexOperation("removeTag", () => layer.tagIndex?.removeTag(scope, tag));
@@ -251,6 +305,12 @@ class SafeCache implements Cache {
     scopedKey: string,
     ttlMs: number,
   ): Promise<T> {
+    // Capture the invalidation epoch the instant BEFORE the origin fetch begins.
+    // Every fetchAndStore call site (foreground, lock holder, background refresh,
+    // refresh-ahead) flows through here, so this single capture fences them all: a
+    // concurrent invalidate()/invalidateByTag() that lands while the fetcher runs
+    // (or while writeEntry awaits) bumps the epoch and the write is dropped.
+    const epochAtStart = this.currentEpoch(scopedKey);
     const value = await query.fetcher();
     if ((value === null && query.cacheNull !== true) || value === undefined) {
       return value;
@@ -274,7 +334,7 @@ class SafeCache implements Cache {
     // expiresAt/staleUntil inside the entry. Non-SWR behavior is unchanged.
     const physicalTtlMs = this.resolvePhysicalTtl(now, ttlMs, staleUntil);
 
-    await this.writeEntry(scopedKey, entry, physicalTtlMs, query.tenant);
+    await this.writeEntry(scopedKey, entry, physicalTtlMs, query.tenant, epochAtStart, query.key);
     return value;
   }
 
@@ -296,21 +356,48 @@ class SafeCache implements Cache {
       return this.fetchAndStore(query, scopedKey, ttlMs);
     }
 
+    const lockTtl = this.resolveLockTtl();
     let handle: CacheLockHandle | null;
+    const acquireStart = this.clock.now();
     try {
-      handle = await this.withTimeout(
-        () => lock.acquire(scopedKey, this.resolveLockTtl(query)),
-        query.timeout,
-      );
+      handle = await this.withTimeout(() => lock.acquire(scopedKey, lockTtl), query.timeout);
     } catch (error) {
       this.recordError("lock", error, query.key, query.tenant);
       if (!this.failOpen) {
         throw error;
       }
       return this.fetchAndStore(query, scopedKey, ttlMs);
+    } finally {
+      this.emit({
+        type: "lock_wait",
+        key: query.key,
+        durationMs: this.clock.now() - acquireStart,
+        tenant: query.tenant,
+      });
     }
 
     if (handle) {
+      const acquired = handle;
+      // Keep the lock alive for as long as we hold it: a slow origin fetch must not
+      // let the lock TTL lapse and admit a second holder. Renew at half the TTL.
+      const renewIntervalMs = Math.max(1000, Math.floor(lockTtl / 2));
+      const renewTimer = setInterval(() => {
+        void acquired.renew(lockTtl).then(
+          (stillHeld) => {
+            if (!stillHeld) {
+              this.recordError(
+                "lock:renew",
+                new Error("lock renewal reported the lock is no longer held"),
+                query.key,
+                query.tenant,
+              );
+            }
+          },
+          (error: unknown) => this.recordError("lock:renew", error, query.key, query.tenant),
+        );
+      }, renewIntervalMs);
+      // Do not keep the event loop alive solely for the renewal timer.
+      renewTimer.unref();
       try {
         // Another process may have populated the cache between our initial read and
         // acquiring the lock. Re-check the layers before hitting the origin so the
@@ -321,7 +408,8 @@ class SafeCache implements Cache {
         }
         return await this.fetchAndStore(query, scopedKey, ttlMs);
       } finally {
-        await this.releaseLock(handle, query);
+        clearInterval(renewTimer);
+        await this.releaseLock(acquired, query);
       }
     }
 
@@ -337,13 +425,22 @@ class SafeCache implements Cache {
     scopedKey: string,
     entry: CacheEntry<T>,
     ttlMs: number,
-    tenant?: string,
+    tenant: string | undefined,
+    epochAtStart: number,
+    logicalKey?: string,
   ): Promise<void> {
+    // Fence the whole write against a concurrent invalidation: if an invalidation
+    // landed between the epoch capture (before the fetch) and now, drop the write
+    // entirely so we never re-store data that was just invalidated.
+    if (this.currentEpoch(scopedKey) !== epochAtStart) {
+      return;
+    }
+
     let raw: string | Uint8Array;
     try {
       raw = this.serializer.serialize(entry);
     } catch (error) {
-      this.recordError("serialize", error, scopedKey, tenant);
+      this.recordError("serialize", error, logicalKey ?? scopedKey, tenant);
       if (!this.failOpen) {
         throw error;
       }
@@ -351,10 +448,14 @@ class SafeCache implements Cache {
     }
 
     for (const layer of this.layers) {
+      // Re-check before each layer: an invalidation can land mid-loop too.
+      if (this.currentEpoch(scopedKey) !== epochAtStart) {
+        return;
+      }
       if (await this.isStaleVersion(layer.provider, scopedKey, entry.version)) {
         continue;
       }
-      await this.safeProviderWrite(layer.provider, scopedKey, raw, ttlMs);
+      await this.safeProviderWrite(layer.provider, scopedKey, raw, ttlMs, logicalKey, tenant);
       await this.safeTagIndexOperation("addTags", () =>
         layer.tagIndex?.addTags(
           scopePrefix(this.options.namespace, tenant),
@@ -363,6 +464,14 @@ class SafeCache implements Cache {
           ttlMs,
         ),
       );
+    }
+
+    // Re-check AFTER all provider.set calls: an invalidation may have landed during
+    // the write's awaits and already deleted the (now superseded) old value before
+    // our set completed, leaving our fresh-but-stale value behind. Compensate by
+    // deleting what we just wrote so the invalidation wins.
+    if (this.currentEpoch(scopedKey) !== epochAtStart) {
+      await this.deleteScopedKey(scopedKey, logicalKey, tenant);
     }
   }
 
@@ -386,7 +495,13 @@ class SafeCache implements Cache {
     }
   }
 
-  private async backfill<T>(read: ReadResult<T>, scopedKey: string): Promise<void> {
+  private async backfill<T>(
+    read: ReadResult<T>,
+    scopedKey: string,
+    epoch: number,
+    logicalKey?: string,
+    tenant?: string,
+  ): Promise<void> {
     if (read.state === "miss" || read.layerIndex === 0) {
       return;
     }
@@ -394,11 +509,16 @@ class SafeCache implements Cache {
     if (ttlMs === 0) {
       return;
     }
+    // Fence: if the key was invalidated between the read and now, do not re-warm the
+    // upper layers with the value the invalidation just removed.
+    if (this.currentEpoch(scopedKey) !== epoch) {
+      return;
+    }
     const raw = this.serializer.serialize(read.entry);
     for (let index = 0; index < read.layerIndex; index += 1) {
       const layer = this.layers[index];
       if (layer) {
-        await this.safeProviderWrite(layer.provider, scopedKey, raw, ttlMs);
+        await this.safeProviderWrite(layer.provider, scopedKey, raw, ttlMs, logicalKey, tenant);
       }
     }
   }
@@ -465,6 +585,7 @@ class SafeCache implements Cache {
     scopedKey: string,
     query: QueryOptions<T>,
   ): Promise<string | Uint8Array | null> {
+    const start = this.clock.now();
     try {
       const value = await this.withTimeout(() => provider.get(scopedKey), query.timeout);
       this.circuitBreaker.recordSuccess();
@@ -476,6 +597,15 @@ class SafeCache implements Cache {
         throw error;
       }
       return null;
+    } finally {
+      this.emit({
+        type: "provider_latency",
+        layer: provider.name,
+        op: "get",
+        durationMs: this.clock.now() - start,
+        key: query.key,
+        tenant: query.tenant,
+      });
     }
   }
 
@@ -484,27 +614,56 @@ class SafeCache implements Cache {
     scopedKey: string,
     raw: string | Uint8Array,
     ttlMs: number,
+    logicalKey?: string,
+    tenant?: string,
   ): Promise<void> {
     if (this.circuitBreaker.isOpen) {
       return;
     }
+    const start = this.clock.now();
     try {
       await this.withTimeout(() => provider.set(scopedKey, raw, { ttlMs }));
     } catch (error) {
       this.circuitBreaker.recordFailure();
-      this.recordError("set", error, scopedKey);
+      // Prefer the logical key + tenant so error consumers see the same identity
+      // they queried; fall back to the scoped key only when the logical one is
+      // out of scope (e.g. backfill paths without a query in hand).
+      this.recordError("set", error, logicalKey ?? scopedKey, tenant);
       if (!this.failOpen) {
         throw error;
       }
+    } finally {
+      this.emit({
+        type: "provider_latency",
+        layer: provider.name,
+        op: "set",
+        durationMs: this.clock.now() - start,
+        key: logicalKey ?? scopedKey,
+        tenant,
+      });
     }
   }
 
-  private async deleteScopedKey(scopedKey: string): Promise<void> {
+  private async deleteScopedKey(
+    scopedKey: string,
+    logicalKey?: string,
+    tenant?: string,
+  ): Promise<void> {
     for (const layer of this.layers) {
+      const start = this.clock.now();
       try {
         await this.withTimeout(() => layer.provider.delete(scopedKey));
       } catch (error) {
-        this.recordError("delete", error, scopedKey);
+        this.recordError("delete", error, logicalKey ?? scopedKey, tenant);
+      } finally {
+        this.emit({
+          type: "provider_latency",
+          layer: layer.provider.name,
+          op: "delete",
+          durationMs: this.clock.now() - start,
+          key: logicalKey ?? scopedKey,
+          tenant,
+        });
       }
     }
   }
@@ -529,6 +688,13 @@ class SafeCache implements Cache {
     }
   }
 
+  /**
+   * Race `task` against a timeout. NOTE: a timed-out op is abandoned, not
+   * cancelled — the underlying provider call (e.g. a slow set) may still complete
+   * later and land its write. That late write can no longer resurrect invalidated
+   * data, because the FIX-1 epoch fence in writeEntry re-checks the invalidation
+   * epoch and compensates (deletes) when an invalidation raced the write.
+   */
   private async withTimeout<T>(
     task: () => Promise<T>,
     timeout = this.options.safety?.timeout,
@@ -574,7 +740,7 @@ class SafeCache implements Cache {
     query: QueryOptions<T>,
     scopedKey: string,
   ): Promise<ReadResult<T>> {
-    const deadline = Date.now() + this.resolveLockTtl(query);
+    const deadline = Date.now() + this.resolveLockTtl();
     while (Date.now() < deadline) {
       await delay(LOCK_POLL_INTERVAL_MS);
       const read = await this.readLayers<T>(query, scopedKey);
@@ -596,8 +762,12 @@ class SafeCache implements Cache {
     }
   }
 
-  private resolveLockTtl<T>(query: QueryOptions<T>): number {
-    return query.timeout ? parseDuration(query.timeout, "timeout") : DEFAULT_LOCK_TTL_MS;
+  private resolveLockTtl(): number {
+    // Lock TTL is decoupled from query.timeout: a per-request timeout governs how
+    // long we wait on a single provider op, whereas the lock must live long enough
+    // for the holder to finish fetching+storing regardless of any read timeout.
+    const configured = this.options.safety?.lockTtl;
+    return configured ? parseDuration(configured, "lockTtl") : DEFAULT_LOCK_TTL_MS;
   }
 
   private get failOpen(): boolean {
@@ -637,6 +807,9 @@ class SafeCache implements Cache {
       return true;
     }
     this.seenEventIds.add(id);
+    // Bounded best-effort dedup: we keep only the most recent ~1000 ids and evict the
+    // oldest. A duplicate that arrives after its id has aged out will be re-processed,
+    // but invalidation is idempotent so the worst case is a redundant invalidate.
     if (this.seenEventIds.size > 1_000) {
       const first = this.seenEventIds.values().next().value;
       if (first) {

@@ -1,6 +1,6 @@
 # @safecache/events
 
-Event helpers for SafeCache distributed invalidation, dedupe, audit, and source IDs.
+Event helpers for SafeCache distributed invalidation, validation, audit, and source IDs.
 
 SafeCache packages are currently published as `0.1.0`. APIs are usable but may change before `1.0`.
 
@@ -13,7 +13,7 @@ pnpm add @safecache/events @safecache/core
 ## Usage
 
 ```ts
-import { EventDeduper, createCacheEvent, createSourceId } from "@safecache/events";
+import { createCacheEvent, createSourceId, parseCacheEvent } from "@safecache/events";
 
 const source = createSourceId("api");
 const event = createCacheEvent({
@@ -24,10 +24,10 @@ const event = createCacheEvent({
   reason: "user updated",
 });
 
-const deduper = new EventDeduper();
-if (!deduper.seen(event.id)) {
-  await bus.publish(event);
-}
+await bus.publish(event);
+
+// On the receiving side, validate untrusted payloads before dispatching them.
+const incoming = parseCacheEvent(rawMessage);
 ```
 
 ## API
@@ -35,7 +35,12 @@ if (!deduper.seen(event.id)) {
 - `createSourceId`
 - `createCacheEvent`
 - `createCacheAuditLogEntry`
-- `EventDeduper`
+- `isCacheEvent` (re-exported from `@safecache/core`)
+- `parseCacheEvent` (re-exported from `@safecache/core`)
+
+Event dedupe is handled inside the core cache runtime (`createCache`), so this
+package does not ship a standalone deduper. The previous `EventDeduper` export
+was unused and has been removed in favor of leaning on core.
 
 ## When To Use This
 

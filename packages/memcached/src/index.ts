@@ -1,4 +1,4 @@
-import type { CacheProvider, CacheTagIndex } from "@safecache/core";
+import { InMemoryTagIndex, toError, type CacheProvider, type CacheTagIndex } from "@safecache/core";
 
 export interface MemcachedClient {
   get(key: string): Promise<string | null>;
@@ -8,31 +8,142 @@ export interface MemcachedClient {
   version?(): Promise<string>;
 }
 
+export interface MemcachedProviderOptions {
+  /**
+   * Notifier for cache-side failures. Every error raised on the cache path
+   * (get/set/delete/clear) is caught, routed here, and then swallowed so the
+   * host operation continues as if the cache were absent — this is the core
+   * SafeCache guarantee. Defaults to a silent no-op (library code never logs by
+   * default); wire it to your logger / Sentry / metrics to observe a degraded
+   * cache. The notifier is invoked defensively: if it throws, the throw is
+   * swallowed so the notifier itself can never break the caller.
+   */
+  onError?: (error: Error) => void;
+  /**
+   * Opt in to fail-closed clear(): when true, a `clear()` with no underlying
+   * `client.flush` rejects instead of routing to `onError`. Default false keeps
+   * the SafeCache contract (swallow + notify).
+   */
+  propagateInvalidationErrors?: boolean;
+}
+
 export interface MemcachedProvider extends CacheProvider {
   tagIndex: CacheTagIndex;
   clear(): Promise<void>;
   health(): Promise<{ ok: boolean; details?: { version: string } }>;
 }
 
-export function memcachedProvider(client: MemcachedClient): MemcachedProvider {
-  const tagIndex = new LocalTagIndex();
+/**
+ * Memcached treats a TTL of more than 30 days (in seconds) as an absolute Unix
+ * timestamp rather than a relative offset, which would cause large SWR/refresh
+ * windows to expire immediately. Anything at or below this bound stays relative.
+ */
+const RELATIVE_TTL_MAX_SECONDS = 2_592_000; // 30 days
+
+/**
+ * Single-character sentinels written as the first byte of every stored value so
+ * reads can losslessly distinguish a plain UTF-8 string from binary bytes that a
+ * `TextDecoder` round-trip would otherwise corrupt. Binary payloads are
+ * base64-encoded; strings are stored verbatim after the marker.
+ */
+const STRING_SENTINEL = "s";
+const BINARY_SENTINEL = "b";
+
+function encodeValue(value: string | Uint8Array): string {
+  if (typeof value === "string") {
+    return STRING_SENTINEL + value;
+  }
+  return BINARY_SENTINEL + Buffer.from(value).toString("base64");
+}
+
+function decodeValue(stored: string): string | Uint8Array {
+  const marker = stored.charAt(0);
+  const payload = stored.slice(1);
+  if (marker === BINARY_SENTINEL) {
+    return new Uint8Array(Buffer.from(payload, "base64"));
+  }
+  if (marker === STRING_SENTINEL) {
+    return payload;
+  }
+  // Unmarked legacy value (written before this encoding existed): pass through
+  // verbatim rather than risk dropping data.
+  return stored;
+}
+
+/**
+ * Convert a relative TTL in milliseconds to the seconds value Memcached expects.
+ * Values above the 30-day relative bound are passed as an absolute epoch
+ * (`now + seconds`) so Memcached does not reinterpret them as a timestamp and
+ * expire the entry instantly.
+ */
+function toMemcachedTtlSeconds(ttlMs: number): number {
+  const seconds = Math.max(1, Math.ceil(ttlMs / 1_000));
+  if (seconds > RELATIVE_TTL_MAX_SECONDS) {
+    return Math.floor(Date.now() / 1_000) + seconds;
+  }
+  return seconds;
+}
+
+export function memcachedProvider(
+  client: MemcachedClient,
+  options: MemcachedProviderOptions = {},
+): MemcachedProvider {
+  const tagIndex = new InMemoryTagIndex();
+  const notify = options.onError ?? (() => {});
+
+  function reportError(error: unknown): void {
+    try {
+      notify(toError(error));
+    } catch {
+      // A throwing notifier must never break the host application.
+    }
+  }
+
   return {
     name: "memcached",
     tagIndex,
     async get(key) {
-      return client.get(key);
+      try {
+        const stored = await client.get(key);
+        return stored === null ? null : decodeValue(stored);
+      } catch (error) {
+        reportError(error);
+        return null;
+      }
     },
-    async set(key, value, options) {
-      const text = typeof value === "string" ? value : new TextDecoder().decode(value);
-      await client.set(key, text, Math.max(1, Math.ceil(options.ttlMs / 1_000)));
+    async set(key, value, setOptions) {
+      try {
+        await client.set(key, encodeValue(value), toMemcachedTtlSeconds(setOptions.ttlMs));
+      } catch (error) {
+        reportError(error);
+      }
     },
     async delete(key) {
-      await client.delete(key);
-      await tagIndex.removeKeyFromAllScopes(key);
+      try {
+        await client.delete(key);
+      } catch (error) {
+        reportError(error);
+      }
     },
     async clear() {
-      await client.flush?.();
-      tagIndex.clear();
+      if (!client.flush) {
+        const error = new Error(
+          "memcached clear() is unavailable: the client does not implement flush(); stale data cannot be invalidated",
+        );
+        if (options.propagateInvalidationErrors) {
+          throw error;
+        }
+        reportError(error);
+        return;
+      }
+      try {
+        await client.flush();
+      } catch (error) {
+        if (options.propagateInvalidationErrors) {
+          throw toError(error);
+        }
+        reportError(error);
+      }
     },
     async health() {
       if (!client.version) {
@@ -41,66 +152,4 @@ export function memcachedProvider(client: MemcachedClient): MemcachedProvider {
       return { ok: true, details: { version: await client.version() } };
     },
   };
-}
-
-class LocalTagIndex implements CacheTagIndex {
-  private readonly tags = new Map<string, Set<string>>();
-  private readonly keyTags = new Map<string, Set<string>>();
-
-  async addTags(scope: string, key: string, tags: string[]): Promise<void> {
-    const scopedKey = this.scopedKey(scope, key);
-    const existing = this.keyTags.get(scopedKey) ?? new Set<string>();
-    for (const tag of tags) {
-      const scopedTag = this.scopedTag(scope, tag);
-      const keys = this.tags.get(scopedTag) ?? new Set<string>();
-      keys.add(key);
-      this.tags.set(scopedTag, keys);
-      existing.add(tag);
-    }
-    this.keyTags.set(scopedKey, existing);
-  }
-
-  async getKeysByTag(scope: string, tag: string): Promise<string[]> {
-    return [...(this.tags.get(this.scopedTag(scope, tag)) ?? [])];
-  }
-
-  async removeKey(scope: string, key: string): Promise<void> {
-    const scopedKey = this.scopedKey(scope, key);
-    const tags = this.keyTags.get(scopedKey) ?? new Set<string>();
-    for (const tag of tags) {
-      this.tags.get(this.scopedTag(scope, tag))?.delete(key);
-    }
-    this.keyTags.delete(scopedKey);
-  }
-
-  async removeTag(scope: string, tag: string): Promise<void> {
-    const scopedTag = this.scopedTag(scope, tag);
-    const keys = this.tags.get(scopedTag) ?? new Set<string>();
-    for (const key of keys) {
-      this.keyTags.get(this.scopedKey(scope, key))?.delete(tag);
-    }
-    this.tags.delete(scopedTag);
-  }
-
-  async removeKeyFromAllScopes(key: string): Promise<void> {
-    for (const scopedKey of [...this.keyTags.keys()]) {
-      if (scopedKey.endsWith(`::${key}`)) {
-        const scope = scopedKey.slice(0, -`::${key}`.length);
-        await this.removeKey(scope, key);
-      }
-    }
-  }
-
-  clear(): void {
-    this.tags.clear();
-    this.keyTags.clear();
-  }
-
-  private scopedTag(scope: string, tag: string): string {
-    return `${scope}::${tag}`;
-  }
-
-  private scopedKey(scope: string, key: string): string {
-    return `${scope}::${key}`;
-  }
 }

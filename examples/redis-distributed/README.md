@@ -41,9 +41,17 @@ export function createDistributedCache(redis: RedisClient, source: string) {
       events: redisPubSub(redis),
     },
     defaultTtl: "5m",
+    safety: {
+      failOpen: true,
+      preventStampede: true,
+    },
   });
 }
 ```
+
+The `safety` block keeps reads fail-open (a Redis outage falls back to the
+fetcher instead of throwing) and turns on stampede prevention so concurrent
+misses for the same key coalesce behind a single distributed lock.
 
 Create one cache per app instance and pass a different `source` value to each one, such as
 `api-1`, `api-2`, or a process ID.

@@ -1,4 +1,5 @@
 import {
+  InMemoryTagIndex,
   parseDuration,
   type CacheProvider,
   type CacheTagIndex,
@@ -21,7 +22,6 @@ export interface MemoryProvider extends CacheProvider {
 interface StoredValue {
   value: string | Uint8Array;
   expiresAt: number;
-  insertedAt: number;
 }
 
 const systemClock: Clock = {
@@ -30,6 +30,10 @@ const systemClock: Clock = {
 
 export function memoryProvider(options: MemoryProviderOptions = {}): MemoryProvider {
   const clock = options.clock ?? systemClock;
+  // Insertion order in this Map doubles as the recency order: the first entry is
+  // the least-recently-used and the last is the most-recently-used. `get()` bumps
+  // recency by re-inserting, and overflow eviction removes the first entry. Both
+  // are O(1) — no sorting.
   const values = new Map<string, StoredValue>();
   const tagIndex = new MemoryTagIndex();
 
@@ -51,12 +55,14 @@ export function memoryProvider(options: MemoryProviderOptions = {}): MemoryProvi
       return;
     }
     while (values.size > maxEntries) {
-      const oldest = [...values.entries()].sort((a, b) => a[1].insertedAt - b[1].insertedAt)[0];
-      if (!oldest) {
+      // Map iteration yields entries in insertion order, so the first key is the
+      // least-recently-used. Pull it in O(1) rather than scanning/sorting.
+      const lru = values.keys().next();
+      if (lru.done) {
         return;
       }
-      values.delete(oldest[0]);
-      void tagIndex.removeKeyFromAllScopes(oldest[0]);
+      values.delete(lru.value);
+      void tagIndex.removeKeyFromAllScopes(lru.value);
     }
   }
 
@@ -64,14 +70,31 @@ export function memoryProvider(options: MemoryProviderOptions = {}): MemoryProvi
     name: "memory",
     tagIndex,
     async get(key) {
-      return evictExpired(key, values.get(key))?.value ?? null;
+      const item = evictExpired(key, values.get(key));
+      if (!item) {
+        return null;
+      }
+      // Bump recency: re-inserting moves the key to the end (most-recently-used)
+      // of the Map's insertion order so LRU eviction targets stale keys.
+      values.delete(key);
+      values.set(key, item);
+      return item.value;
     },
     async set(key, value, setOptions) {
       const ttlMs = setOptions.ttlMs ?? (options.ttl ? parseDuration(options.ttl) : 0);
+      // ttlMs <= 0 means "do not store": such an entry would be expired the
+      // instant it was written (expiresAt <= now), so we skip the write entirely
+      // and drop any prior value/tags for the key to keep get() consistent.
+      if (ttlMs <= 0) {
+        values.delete(key);
+        await tagIndex.removeKeyFromAllScopes(key);
+        return;
+      }
+      // Re-insert so a re-set key also counts as most-recently-used.
+      values.delete(key);
       values.set(key, {
         value,
         expiresAt: clock.now() + ttlMs,
-        insertedAt: clock.now(),
       });
       enforceMaxEntries();
     },
@@ -89,64 +112,78 @@ export function memoryProvider(options: MemoryProviderOptions = {}): MemoryProvi
   };
 }
 
-class MemoryTagIndex implements CacheTagIndex {
-  private readonly tags = new Map<string, Set<string>>();
-  private readonly keyTags = new Map<string, Set<string>>();
+/**
+ * Tag index for the memory provider. Delegates every (scope, key)-addressed
+ * operation to core's {@link InMemoryTagIndex}, which performs EXACT composite
+ * matching (no suffix/prefix collisions). On top of that it tracks, per bare
+ * key, the exact set of scopes the key has been tagged under, so the provider
+ * can purge a key's tags during eviction/delete — where only the flat
+ * (unscoped) key is known — without resorting to error-prone suffix matching.
+ */
+class MemoryTagIndex extends InMemoryTagIndex {
+  /** Reverse map: bare key -> exact scopes the key currently has tags in. */
+  private readonly scopesByKey = new Map<string, Set<string>>();
 
-  async addTags(scope: string, key: string, tags: string[]): Promise<void> {
-    const scopedKey = this.scopedKey(scope, key);
-    const existing = this.keyTags.get(scopedKey) ?? new Set<string>();
-    for (const tag of tags) {
-      const scopedTag = this.scopedTag(scope, tag);
-      const keys = this.tags.get(scopedTag) ?? new Set<string>();
-      keys.add(key);
-      this.tags.set(scopedTag, keys);
-      existing.add(tag);
+  override async addTags(scope: string, key: string, tags: string[], ttlMs: number): Promise<void> {
+    await super.addTags(scope, key, tags, ttlMs);
+    let scopes = this.scopesByKey.get(key);
+    if (scopes === undefined) {
+      scopes = new Set<string>();
+      this.scopesByKey.set(key, scopes);
     }
-    this.keyTags.set(scopedKey, existing);
+    scopes.add(scope);
   }
 
-  async getKeysByTag(scope: string, tag: string): Promise<string[]> {
-    return [...(this.tags.get(this.scopedTag(scope, tag)) ?? [])];
-  }
-
-  async removeKey(scope: string, key: string): Promise<void> {
-    const scopedKey = this.scopedKey(scope, key);
-    const tags = this.keyTags.get(scopedKey) ?? new Set<string>();
-    for (const tag of tags) {
-      this.tags.get(this.scopedTag(scope, tag))?.delete(key);
+  override async removeKey(scope: string, key: string, tags?: string[]): Promise<void> {
+    await super.removeKey(scope, key, tags);
+    // A bare `removeKey` (no `tags`) clears every tag for the key in this scope,
+    // so forget the (scope, key) hint. A partial removal may leave tags behind,
+    // so keep the hint; it stays accurate enough — the underlying exact removal
+    // is a no-op for tags that are already gone.
+    if (tags === undefined) {
+      this.forgetScope(key, scope);
     }
-    this.keyTags.delete(scopedKey);
   }
 
-  async removeTag(scope: string, tag: string): Promise<void> {
-    const scopedTag = this.scopedTag(scope, tag);
-    const keys = this.tags.get(scopedTag) ?? new Set<string>();
-    for (const key of keys) {
-      this.keyTags.get(this.scopedKey(scope, key))?.delete(tag);
-    }
-    this.tags.delete(scopedTag);
-  }
-
+  /**
+   * Remove the EXACT key from every scope it was tagged under. Uses the tracked
+   * scope set (exact strings), never suffix matching, so an unrelated key whose
+   * composite merely shares a trailing substring is never touched.
+   */
   async removeKeyFromAllScopes(key: string): Promise<void> {
-    for (const scopedKey of [...this.keyTags.keys()]) {
-      if (scopedKey.endsWith(`::${key}`)) {
-        const scope = scopedKey.slice(0, -`::${key}`.length);
-        await this.removeKey(scope, key);
+    const scopes = this.scopesByKey.get(key);
+    if (scopes === undefined) {
+      return;
+    }
+    for (const scope of [...scopes]) {
+      await super.removeKey(scope, key);
+    }
+    this.scopesByKey.delete(key);
+  }
+
+  /**
+   * Drop every association. Core's `InMemoryTagIndex` keeps its maps private, so
+   * we wipe it by exact-removing each tracked (scope, key) before clearing our
+   * own tracking — leaving both indexes empty.
+   */
+  clear(): void {
+    for (const [key, scopes] of this.scopesByKey) {
+      for (const scope of scopes) {
+        void super.removeKey(scope, key);
       }
     }
+    this.scopesByKey.clear();
   }
 
-  clear(): void {
-    this.tags.clear();
-    this.keyTags.clear();
-  }
-
-  private scopedTag(scope: string, tag: string): string {
-    return `${scope}::${tag}`;
-  }
-
-  private scopedKey(scope: string, key: string): string {
-    return `${scope}::${key}`;
+  /** Forget that `key` had tags in `scope`, pruning the empty entry. */
+  private forgetScope(key: string, scope: string): void {
+    const scopes = this.scopesByKey.get(key);
+    if (scopes === undefined) {
+      return;
+    }
+    scopes.delete(scope);
+    if (scopes.size === 0) {
+      this.scopesByKey.delete(key);
+    }
   }
 }

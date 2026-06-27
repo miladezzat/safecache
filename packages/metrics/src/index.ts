@@ -11,6 +11,7 @@ export const metricNames = {
   cacheErrorsTotal: "cache_errors_total",
   cacheInvalidationsTotal: "cache_invalidations_total",
   cacheStaleServedTotal: "cache_stale_served_total",
+  cacheRefreshesTotal: "cache_refreshes_total",
   cacheLockWaitMs: "cache_lock_wait_ms",
   cacheProviderLatencyMs: "cache_provider_latency_ms",
 } as const;
@@ -21,6 +22,7 @@ export const safeCacheMetricNames = [
   metricNames.cacheErrorsTotal,
   metricNames.cacheInvalidationsTotal,
   metricNames.cacheStaleServedTotal,
+  metricNames.cacheRefreshesTotal,
   metricNames.cacheLockWaitMs,
   metricNames.cacheProviderLatencyMs,
 ] as const;
@@ -31,7 +33,8 @@ export type CounterMetricName =
   | typeof metricNames.cacheMissesTotal
   | typeof metricNames.cacheErrorsTotal
   | typeof metricNames.cacheInvalidationsTotal
-  | typeof metricNames.cacheStaleServedTotal;
+  | typeof metricNames.cacheStaleServedTotal
+  | typeof metricNames.cacheRefreshesTotal;
 export type HistogramMetricName =
   | typeof metricNames.cacheLockWaitMs
   | typeof metricNames.cacheProviderLatencyMs;
@@ -68,6 +71,7 @@ const counterNames = [
   metricNames.cacheErrorsTotal,
   metricNames.cacheInvalidationsTotal,
   metricNames.cacheStaleServedTotal,
+  metricNames.cacheRefreshesTotal,
 ] as const;
 
 const histogramNames = [metricNames.cacheLockWaitMs, metricNames.cacheProviderLatencyMs] as const;
@@ -107,6 +111,16 @@ export function createMetricsCollector(): MetricsCollector {
           counters.cache_errors_total.value += 1;
           break;
         case "refresh":
+          counters.cache_refreshes_total.value += 1;
+          break;
+        case "provider_latency":
+          this.observe(metricNames.cacheProviderLatencyMs, event.durationMs, {
+            layer: event.layer,
+            op: event.op,
+          });
+          break;
+        case "lock_wait":
+          this.observe(metricNames.cacheLockWaitMs, event.durationMs, { key: event.key });
           break;
       }
     },
@@ -117,17 +131,28 @@ export function createMetricsCollector(): MetricsCollector {
       counters.cache_errors_total.value = stats.errors;
       counters.cache_invalidations_total.value = stats.invalidations;
       counters.cache_stale_served_total.value = stats.staleServed;
+      counters.cache_refreshes_total.value = stats.refreshes;
     },
 
     attach(cache) {
       const handler: CacheRuntimeEventHandler = (event) => {
         this.recordRuntimeEvent(event);
       };
-      for (const eventName of ["hit", "miss", "stale", "invalidate", "error"] as const) {
+      const eventNames = [
+        "hit",
+        "miss",
+        "stale",
+        "refresh",
+        "invalidate",
+        "error",
+        "provider_latency",
+        "lock_wait",
+      ] as const;
+      for (const eventName of eventNames) {
         cache.on(eventName, handler);
       }
       return () => {
-        for (const eventName of ["hit", "miss", "stale", "invalidate", "error"] as const) {
+        for (const eventName of eventNames) {
           cache.off(eventName, handler);
         }
       };
@@ -163,6 +188,7 @@ function createCounters(): Record<CounterMetricName, CounterSnapshot> {
     cache_errors_total: { value: 0 },
     cache_invalidations_total: { value: 0 },
     cache_stale_served_total: { value: 0 },
+    cache_refreshes_total: { value: 0 },
   };
 }
 
@@ -182,6 +208,7 @@ function cloneCounters(
     cache_errors_total: { ...counters.cache_errors_total },
     cache_invalidations_total: { ...counters.cache_invalidations_total },
     cache_stale_served_total: { ...counters.cache_stale_served_total },
+    cache_refreshes_total: { ...counters.cache_refreshes_total },
   };
 }
 
