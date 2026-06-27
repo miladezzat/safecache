@@ -1,4 +1,14 @@
+import { isCacheEvent, parseCacheEvent } from "@safecache/core";
 import type { CacheEvent, CacheEventType } from "@safecache/core";
+
+/**
+ * Re-export core's event validation helpers so transports and consumers have a
+ * single shared validation surface. Event dedupe lives inside the core cache
+ * runtime (`createCache`), so this package intentionally does not ship its own
+ * deduper.
+ */
+export { isCacheEvent, parseCacheEvent };
+export type { CacheEvent, CacheEventType };
 
 let sourceCounter = 0;
 let eventCounter = 0;
@@ -66,24 +76,4 @@ export function createCacheAuditLogEntry(event: CacheEvent): CacheAuditLogEntry 
     timestamp: event.timestamp,
     type: event.type,
   };
-}
-
-export class EventDeduper {
-  private readonly ids = new Set<string>();
-
-  constructor(private readonly maxSize = 1_000) {}
-
-  seen(id: string): boolean {
-    if (this.ids.has(id)) {
-      return true;
-    }
-    this.ids.add(id);
-    if (this.ids.size > this.maxSize) {
-      const oldest = this.ids.values().next().value;
-      if (oldest) {
-        this.ids.delete(oldest);
-      }
-    }
-    return false;
-  }
 }

@@ -1,4 +1,5 @@
 import type { Cache, CachePlugin, CacheRuntimeEvent } from "./types";
+import { toError } from "./utils";
 
 export class PluginRegistry {
   private readonly plugins = new Map<string, CachePlugin>();
@@ -36,12 +37,18 @@ export class PluginRegistry {
       return;
     }
     this.shutdownComplete = true;
+    // Shut down in reverse registration order. A rejecting plugin must not abort
+    // the rest: isolate each shutdown, emit an error event, and continue.
     for (const plugin of [...this.plugins.values()].reverse()) {
-      await plugin.shutdown?.();
+      try {
+        await plugin.shutdown?.();
+      } catch (error) {
+        this.emit({
+          type: "error",
+          operation: `plugin:${plugin.name}:shutdown`,
+          error: toError(error),
+        });
+      }
     }
   }
-}
-
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }

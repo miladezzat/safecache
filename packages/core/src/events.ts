@@ -15,7 +15,14 @@ export class RuntimeEvents {
 
   emit(event: CacheRuntimeEvent): void {
     for (const handler of this.handlers.get(event.type) ?? []) {
-      handler(event);
+      // Isolate each handler: a throwing handler must not drop the remaining
+      // handlers or corrupt the emitting operation. Swallow the throw and
+      // continue (no rethrow).
+      try {
+        handler(event);
+      } catch {
+        // Intentionally ignored: observer errors are not the emitter's concern.
+      }
     }
   }
 }

@@ -2,8 +2,8 @@
 
 This directory contains the operational and integration documentation for SafeCache.
 
-SafeCache is early-stage. Packages are published as `0.1.0`; APIs are usable but may change before
-`1.0`.
+SafeCache is early-stage. Packages share a single `0.1.x` version line; APIs are usable but may
+change before `1.0`. See each package's `package.json` for its exact published version.
 
 ## Start Here
 
@@ -36,15 +36,28 @@ SafeCache is early-stage. Packages are published as `0.1.0`; APIs are usable but
 - [Audit, actor, and reason tracking](audit-actor-reason-tracking.md)
 - [Multi-region notes](multi-region.md)
 
+## Providers And Serializers
+
+- [Redis setup](redis-setup.md)
+- [Valkey provider](valkey.md)
+- [Memcached provider](memcached.md)
+- [Serializers](serializers.md)
+
 ## Framework Integrations
 
 - [Decorators](decorators.md)
 - [NestJS usage](nestjs-usage.md)
+- [Express middleware](express.md)
+- [Fastify plugin](fastify.md)
 
 ## ORM Integrations
 
 - [Prisma usage](prisma-usage.md)
 - [Mongoose usage](mongoose-usage.md)
+
+## Testing
+
+- [Testing utilities](testing.md)
 
 ## Magic Sync
 

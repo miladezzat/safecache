@@ -54,6 +54,8 @@ export interface CacheSerializer {
 }
 
 export interface CacheLockHandle {
+  readonly token: string; // unique fencing token per acquisition
+  renew(ttlMs: number): Promise<boolean>; // extend lock; true if still held & renewed
   release(): Promise<void>;
 }
 
@@ -113,6 +115,7 @@ export interface CacheSafetyOptions {
   staleWhileRevalidate?: boolean;
   refreshAhead?: boolean;
   circuitBreaker?: boolean | Partial<CircuitBreakerOptions>;
+  lockTtl?: DurationInput; // decouples lock TTL from query.timeout
 }
 
 export interface CacheOptions {
@@ -136,6 +139,19 @@ export interface CacheOptions {
   plugins?: CachePlugin[];
   clock?: Clock;
   source?: string;
+  /**
+   * Notifier for cache-side failures. Invoked for every internal error SafeCache
+   * encounters (provider get/set/delete, (de)serialization, tag-index ops, lock
+   * acquire/renew/release, distributed publish/subscribe, plugin lifecycle).
+   *
+   * SafeCache is fail-open by default: these errors are reported here (and via
+   * `cache.on("error", ...)`) but are NEVER thrown into your application unless you
+   * explicitly opt into fail-closed behavior (`safety.failOpen: false`). Wire this
+   * to your logger / Sentry / metrics so a degraded cache is observable without
+   * affecting request handling. The notifier is invoked defensively — if it throws,
+   * the throw is swallowed so the notifier itself can never break the caller.
+   */
+  onError?: (event: CacheErrorEvent) => void;
 }
 
 export interface QueryOptions<T> {
@@ -172,7 +188,15 @@ export interface CacheStats {
   circuitBreakerOpen: boolean;
 }
 
-export type CacheRuntimeEventName = "hit" | "miss" | "stale" | "refresh" | "invalidate" | "error";
+export type CacheRuntimeEventName =
+  | "hit"
+  | "miss"
+  | "stale"
+  | "refresh"
+  | "invalidate"
+  | "error"
+  | "provider_latency"
+  | "lock_wait";
 
 export type CacheRuntimeEvent =
   | { type: "hit"; key: string; tenant?: string }
@@ -180,7 +204,18 @@ export type CacheRuntimeEvent =
   | { type: "stale"; key: string; tenant?: string }
   | { type: "refresh"; key: string; tenant?: string }
   | { type: "invalidate"; key?: string; tag?: string; tenant?: string }
-  | { type: "error"; operation: string; error: Error; key?: string; tenant?: string };
+  | { type: "error"; operation: string; error: Error; key?: string; tenant?: string }
+  | {
+      type: "provider_latency";
+      layer: string;
+      op: "get" | "set" | "delete";
+      durationMs: number;
+      key?: string;
+      tenant?: string;
+    }
+  | { type: "lock_wait"; key: string; durationMs: number; tenant?: string };
+
+export type CacheErrorEvent = Extract<CacheRuntimeEvent, { type: "error" }>;
 
 export type CacheRuntimeEventHandler = (event: CacheRuntimeEvent) => void;
 

@@ -11,6 +11,7 @@ provider.
 - entity and collection tags
 - local stampede protection
 - basic runtime stats
+- `onError` fail-safe notifier
 
 ## Packages used
 
@@ -52,6 +53,25 @@ return cache.mutate({
 });
 ```
 
+SafeCache is fail-open: internal faults are never thrown into your application,
+but they are reported through `onError` so a degraded cache stays observable.
+Wire it to your logger / Sentry / metrics:
+
+```ts
+export const cache = createCache({
+  namespace: "basic-node",
+  provider: memoryProvider(),
+  defaultTtl: "5m",
+  safety: { failOpen: true, preventStampede: true },
+  onError: (event) => {
+    console.error(`[safecache] ${event.operation} failed:`, event.error.message);
+  },
+});
+```
+
+The same stream is available imperatively after construction via
+`cache.on("error", handler)`.
+
 ## Expected behavior
 
 `runBasicNodeExample()` performs:
@@ -67,6 +87,7 @@ return cache.mutate({
 - Put `query()` around explicit read paths.
 - Put `mutate()` around write paths.
 - Use both entity tags and collection tags.
+- Pass `onError` so a degraded cache reaches your logger / Sentry / metrics.
 
 ## Related docs
 

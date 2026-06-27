@@ -18,18 +18,33 @@ export function parseDuration(input: DurationInput, label = "duration"): number 
   const value = Number(match[1]);
   const unit = match[2];
 
+  let result: number;
   switch (unit) {
     case "ms":
-      return value;
+      result = value;
+      break;
     case "s":
-      return value * 1_000;
+      result = value * 1_000;
+      break;
     case "m":
-      return value * 60_000;
+      result = value * 60_000;
+      break;
     case "h":
-      return value * 3_600_000;
+      result = value * 3_600_000;
+      break;
     case "d":
-      return value * 86_400_000;
+      result = value * 86_400_000;
+      break;
     default:
       throw new Error(`${label} has an unsupported unit`);
   }
+
+  // Guard against overflow/precision loss: a value large enough to leave the safe
+  // integer range can no longer be reasoned about as a millisecond count, so reject
+  // it rather than silently rounding to an imprecise (or Infinity) duration.
+  if (!Number.isSafeInteger(result)) {
+    throw new Error(`${label} is too large`);
+  }
+
+  return result;
 }

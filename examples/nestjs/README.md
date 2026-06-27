@@ -52,16 +52,38 @@ It adapts that client to the SafeCache Redis provider, lock, and Pub/Sub interfa
 const redis = adaptRedisClient(await createRedisConnection(options.url));
 ```
 
-Then it registers SafeCache through async NestJS module setup:
+Then it registers SafeCache through async NestJS module setup. `onError` is the
+fail-safe notifier: SafeCache is fail-open, so cache-side faults never reach the
+request — they are routed here so a degraded cache stays observable:
 
 ```ts
 export const moduleDefinition = SafeCacheModule.forRootAsync({
   useFactory: () =>
     createRedisBackedCache({
       url: process.env.REDIS_URL ?? "redis://localhost:6379",
-      namespace: process.env.SAFECACHE_NAMESPACE ?? "nestjs-example",
+      namespace: process.env.SAFECACHE_NAMESPACE ?? "nestjs-api",
       source: process.env.HOSTNAME ?? "nestjs-api",
     }),
+  onError: (error) => {
+    console.error("[safecache] cache degraded:", error.message);
+  },
+});
+```
+
+When the cache is built synchronously (no async Redis connection to await),
+register it with `forRoot()` instead:
+
+```ts
+export const memoryModuleDefinition = SafeCacheModule.forRoot({
+  cache: createCache({
+    namespace: "nestjs-memory",
+    layers: [memoryProvider({ ttl: "30s" })],
+    defaultTtl: "5m",
+    safety: { failOpen: true, preventStampede: true },
+  }),
+  onError: (error) => {
+    console.error("[safecache] cache degraded:", error.message);
+  },
 });
 ```
 
@@ -84,7 +106,9 @@ export class UsersService {
 ## What to copy into a real app
 
 - Create the cache in your module composition layer.
-- Import `SafeCacheModule.forRootAsync()` when the Redis connection is async.
+- Import `SafeCacheModule.forRootAsync()` when the Redis connection is async, or
+  `SafeCacheModule.forRoot()` when the cache is built synchronously.
+- Pass `onError` so a degraded cache reaches your logger / Sentry / metrics.
 - Inject `SafeCacheService` into application services.
 - Keep invalidation close to write methods.
 - Use separate Redis clients for Pub/Sub in applications that need dedicated subscriber

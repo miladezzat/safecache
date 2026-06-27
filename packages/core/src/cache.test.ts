@@ -160,6 +160,8 @@ class SharedMemoryLock implements CacheLock {
     }
     this.locked.add(key);
     return {
+      token: `lock-${key}-${Math.random().toString(36).slice(2)}`,
+      renew: async () => true,
       release: async () => {
         this.locked.delete(key);
       },
@@ -581,7 +583,7 @@ describe("createCache", () => {
           expiresAt: Date.now() + 60_000,
         };
         provider.values.set(key, JSON.stringify(entry));
-        return { release: async () => {} };
+        return { token: `peer-${key}`, renew: async () => true, release: async () => {} };
       },
     };
     const cache = createCache({
@@ -706,6 +708,82 @@ describe("createCache", () => {
     resolveRefresh?.("refreshed");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(cache.stats().refreshes).toBe(1);
+  });
+
+  test("invalidate during an in-flight slow fetch fences the late write (FIX-1)", async () => {
+    const clock = new ManualClock();
+    const provider = new RawMapProvider();
+    const cache = createCache({ namespace: "app", provider, clock, defaultTtl: "1m" });
+
+    // The first fetch is held open so we can invalidate WHILE it is in flight.
+    let resolveSlow: ((value: string) => void) | undefined;
+    const slow = new Promise<string>((resolve) => {
+      resolveSlow = resolve;
+    });
+    const fetcher = vi.fn(() => slow);
+
+    const inflight = cache.query({ key: "k", fetcher });
+    // Let the fetcher start (epoch captured) before the invalidation lands.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Concurrent invalidation bumps the key's epoch mid-fetch.
+    await cache.invalidate("k");
+
+    // The slow fetch now resolves: its write must be fenced out by the epoch check.
+    resolveSlow?.("stale-origin");
+    await expect(inflight).resolves.toBe("stale-origin");
+
+    // The value must NOT have been cached, so a subsequent read misses and re-fetches.
+    const fresh = vi.fn(async () => "fresh-origin");
+    await expect(cache.query({ key: "k", fetcher: fresh })).resolves.toBe("fresh-origin");
+    expect(fresh).toHaveBeenCalledTimes(1);
+  });
+
+  test("backfill does not resurrect a key invalidated between read and backfill (FIX-1)", async () => {
+    const clock = new ManualClock();
+    const fast = new RawMapProvider(); // upper layer (index 0): always misses initially
+    const slow = new RawMapProvider(); // lower layer (index 1): holds the hit
+
+    const cache = createCache({
+      namespace: "app",
+      layers: [fast, slow],
+      clock,
+      defaultTtl: "1m",
+    });
+
+    // Seed only the lower layer with a live entry so a read hits at layerIndex 1 and
+    // would normally backfill the upper layer.
+    const scopedKey = "app::k";
+    const entry = {
+      value: "from-lower",
+      tags: [],
+      createdAt: clock.now(),
+      expiresAt: clock.now() + 60_000,
+    };
+    slow.values.set(scopedKey, JSON.stringify(entry));
+
+    // Trigger the invalidation as a side effect of the LOWER layer's get: the hit
+    // value has already been captured by readLayers, so the query still resolves to
+    // "from-lower", but the epoch has been bumped before backfill runs.
+    const originalGet = slow.get.bind(slow);
+    let invalidated = false;
+    slow.get = async (key: string) => {
+      const result = await originalGet(key);
+      if (!invalidated && result !== null) {
+        invalidated = true;
+        await cache.invalidate("k");
+      }
+      return result;
+    };
+
+    await expect(cache.query({ key: "k", fetcher: async () => "origin" })).resolves.toBe(
+      "from-lower",
+    );
+
+    // Backfill must have been fenced: the upper layer was not warmed with the value
+    // the invalidation removed, and the lower layer was deleted by the invalidation.
+    expect(fast.values.has(scopedKey)).toBe(false);
+    expect(slow.values.has(scopedKey)).toBe(false);
   });
 
   test("signed events are accepted by a peer sharing the secret", async () => {

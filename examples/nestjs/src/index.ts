@@ -68,9 +68,31 @@ export const moduleDefinition = SafeCacheModule.forRootAsync({
   useFactory: () =>
     createRedisBackedCache({
       url: process.env.REDIS_URL ?? "redis://localhost:6379",
-      namespace: process.env.SAFECACHE_NAMESPACE ?? "nestjs-example",
+      namespace: process.env.SAFECACHE_NAMESPACE ?? "nestjs-api",
       source: process.env.HOSTNAME ?? "nestjs-api",
     }),
+  // Fail-safe notifier: SafeCache is fail-open, so cache-side faults never reach
+  // the request — route them to your logger / Sentry instead of swallowing them.
+  onError: (error) => {
+    console.error("[safecache] cache degraded:", error.message);
+  },
+});
+
+// When the cache is built synchronously (no async Redis connection to await),
+// register it with `forRoot()` instead. This is the in-memory composition path.
+export const memoryModuleDefinition = SafeCacheModule.forRoot({
+  cache: createCache({
+    namespace: "nestjs-memory",
+    layers: [memoryProvider({ ttl: "30s" })],
+    defaultTtl: "5m",
+    safety: {
+      failOpen: true,
+      preventStampede: true,
+    },
+  }),
+  onError: (error) => {
+    console.error("[safecache] cache degraded:", error.message);
+  },
 });
 
 export class UsersService {

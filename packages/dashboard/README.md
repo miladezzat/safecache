@@ -23,6 +23,35 @@ const dashboard = createDashboard({
 const response = await dashboard.handle({ method: "GET", path: "/api/snapshot" });
 ```
 
+## Security
+
+The dashboard ships with **no authentication** and exposes operational data
+(key names, tags, errors, health). Treat it as internal:
+
+- **Bind to localhost / an internal network by default.** Never expose the
+  dashboard endpoint on a public interface without auth in front of it.
+- **Gate requests with the `authorize` hook.** When provided, it runs on every
+  request before any snapshot is read or HTML rendered. Return `false` (or
+  reject) to deny — the handler responds `401` (denied) or `403` (the hook
+  threw) without leaking data.
+
+```ts
+const dashboard = createDashboard({
+  snapshot: async () => snapshotFromMetrics(),
+  authorize: (request) => isInternalRequest(request), // boolean | Promise<boolean>
+  onError: (error) => log.warn({ err: error }, "dashboard cache error"),
+});
+```
+
+## Cache safety
+
+The dashboard upholds the SafeCache guarantee: a cache/stats failure **never
+throws into the host HTTP server**. Any error raised while producing the
+snapshot (or evaluating `authorize`) is caught, routed to the optional
+`onError` notifier, and rendered as a safe `503` response — the host keeps
+serving. `onError` defaults to a silent no-op so library code never writes to
+your logs uninvited.
+
 ## API
 
 - `createDashboard`
@@ -35,7 +64,10 @@ Use this package when you want an embeddable read-only dashboard endpoint for Sa
 
 ## Production Notes
 
-Keep the dashboard internal. It can expose key names, tags, errors, and operational metadata.
+Keep the dashboard internal. It can expose key names, tags, errors, and
+operational metadata. Bind it to localhost by default and gate every request
+with the `authorize` hook (see [Security](#security)) before exposing it on any
+shared network.
 
 ## Related Packages
 
